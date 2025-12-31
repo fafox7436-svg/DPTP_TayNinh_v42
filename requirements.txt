@@ -1,7 +1,7 @@
 streamlit
 pandas
-plotly
-xlsxwriter
-openpyxl
+numpy
+matplotlib
 scikit-learn
-matplotlib.pyplot
+openpyxl
+xlsxwriter
