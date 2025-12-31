@@ -20,22 +20,34 @@ st.markdown("""
 # 1. HÀM XỬ LÝ (GIỮ NGUYÊN TỪ CODE CHUẨN CỦA BẠN)
 # ==============================================================================
 def them_yeu_to_mua(df):
-    # Xử lý Tết theo lịch Âm (Cập nhật logic nếu cần cho các năm sau)
     def check_tet(row):
         try:
             nam = int(row['Năm'])
             thang = int(row['Tháng'])
-            if nam == 2023 and thang == 1: return 1
-            if nam == 2024 and thang == 2: return 1
-            if nam == 2025 and thang == 1: return 1
-            if nam == 2026 and thang == 2: return 1 # Dự phòng tương lai
+            
+            # Bảng tra cứu tháng chứa Mùng 1 Tết Âm Lịch (Dương lịch)
+            # Từ năm 2020 đến 2035 (Chuẩn xác 100%)
+            lich_tet = {
+                2020: 1, 2021: 2, 2022: 2, 2023: 1, 2024: 2, 
+                2025: 1, 2026: 2, 2027: 2, 2028: 1, 2029: 2, 
+                2030: 2, 2031: 1, 2032: 2, 2033: 1, 2034: 2, 
+                2035: 2
+            }
+            
+            # Kiểm tra: Nếu năm có trong danh sách VÀ tháng trùng khớp
+            if nam in lich_tet and lich_tet[nam] == thang:
+                return 1
             return 0
         except:
             return 0
             
+    # Áp dụng logic Tết mới
     df['Co_Tet'] = df.apply(check_tet, axis=1)
+    
+    # Mùa Nắng (Tháng 3, 4, 5) & Mùa Mưa (Tháng 6-11) - Quy luật cố định
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3, 4, 5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6, 7, 8, 9, 10, 11] else 0)
+    
     return df
 
 @st.cache_data # Cache để không phải train lại nếu không đổi file
