@@ -2,6 +2,6 @@ streamlit
 pandas
 plotly
 xlsxwriter
-matplotlib
 openpyxl
 scikit-learn
+matplotlib.pyplot
