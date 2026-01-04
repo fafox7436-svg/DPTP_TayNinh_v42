@@ -5,14 +5,9 @@ import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
+# Import thư viện Holt-Winters chuẩn
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import io
-
-# --- KIỂM TRA THƯ VIỆN ---
-try:
-    from statsmodels.tsa.arima.model import ARIMA
-    HAS_ARIMA = True
-except ImportError:
-    HAS_ARIMA = False
 
 try:
     import google.generativeai as genai
@@ -21,9 +16,9 @@ except ImportError:
     HAS_GEMINI = False
 
 # --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="Dự Báo & So Sánh Tối Ưu", layout="wide")
+st.set_page_config(page_title="Dự Báo Phụ Tải", layout="wide")
 st.title("⚡ HỆ THỐNG DỰ BÁO PHỤ TẢI")
-st.markdown("Hệ thống tự động so sánh **Neural Network**, **Random Forest** và **SARIMA** để tìm ra phương pháp chính xác nhất cho từng tháng.")
+st.markdown("So sánh 3 phương pháp: **Neural Network**, **Random Forest** và **Holt-Winters** (Chuyên trị chuỗi thời gian & mùa vụ).")
 
 # ==============================================================================
 # 1. HÀM GEMINI
@@ -60,14 +55,12 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     except: df_train = pd.read_excel(file_train, sheet_name=0)
     df_input = pd.read_excel(file_input)
 
-    # --- CƠ CHẾ ỔN ĐỊNH SỰ KIỆN ---
+    # Xử lý sự kiện (Nếu có)
     use_event = False
     if manual_events_dict and any(v != 0 for v in manual_events_dict.values()):
         use_event = True
     
-    def get_event(row): 
-        return manual_events_dict.get((int(row['Năm']), int(row['Tháng'])), 0)
-    
+    def get_event(row): return manual_events_dict.get((int(row['Năm']), int(row['Tháng'])), 0)
     if use_event:
         df_train['Su_Kien'] = df_train.apply(get_event, axis=1)
         df_input['Su_Kien'] = df_input.apply(get_event, axis=1)
@@ -84,7 +77,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     valid_features = [f for f in features if f in df_train.columns and f in df_input.columns]
     target = 'Tổng thương phẩm'
 
-    # Dữ liệu Train
+    # Dữ liệu Train Machine Learning
     data_clean = df_train.dropna(subset=valid_features + [target]).copy()
     X = data_clean[valid_features]
     y = data_clean[target]
@@ -92,85 +85,58 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # 1. Random Forest
+    # --- 1. RANDOM FOREST ---
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
     rf.fit(X, y)
 
-    # 2. Neural Network (Chuẩn)
+    # --- 2. NEURAL NETWORK (Cấu hình chuẩn) ---
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
     nn.fit(X_scaled, y)
     
-# 3. SARIMA (PHIÊN BẢN AUTO-TUNING + ÉP KIỂU EVIEWS)
-    arima_fit = None
-    if HAS_ARIMA:
-        try:
-            ts_data = data_clean.copy()
-            # 1. Chuẩn hóa thời gian
-            ts_data['Date'] = pd.to_datetime(dict(year=ts_data['Năm'], month=ts_data['Tháng'], day=1))
-            ts_data = ts_data.sort_values('Date')
-            ts_series = ts_data.set_index('Date')[target].asfreq('MS')
-            
-            # 2. Logarit hóa (Giống EViews để ổn định dao động)
-            ts_log = np.log(ts_series)
+    # --- 3. HOLT-WINTERS (Thay thế ARIMA) ---
+    # Phương pháp chuyên dụng: Holt-Winters Exponential Smoothing
+    hw_fit = None
+    try:
+        ts_data = data_clean.copy()
+        ts_data['Date'] = pd.to_datetime(dict(year=ts_data['Năm'], month=ts_data['Tháng'], day=1))
+        ts_data = ts_data.sort_values('Date')
+        ts_series = ts_data.set_index('Date')[target].asfreq('MS')
 
-            # 3. AUTO-SEARCH (Mô phỏng EViews tìm tham số tốt nhất)
-            # Danh sách các bộ tham số "vàng" cho dữ liệu điện lực
-            # Cấu trúc: (p,d,q) x (P,D,Q,s)
-            param_grid = [
-                ((1, 1, 1), (0, 1, 1, 12)),  # Cấu hình 1: Tiêu chuẩn (Thường EViews chọn cái này)
-                ((1, 1, 0), (0, 1, 0, 12)),  # Cấu hình 2: Đơn giản hơn
-                ((0, 1, 1), (0, 1, 1, 12)),  # Cấu hình 3: Thiên về trung bình trượt
-                ((2, 1, 0), (1, 1, 0, 12))   # Cấu hình 4: Phức tạp (nếu dữ liệu đủ tốt)
-            ]
-            
-            best_aic = float("inf")
-            best_model = None
-
-            for order, seasonal_order in param_grid:
-                try:
-                    # enforce_stationarity=False: ĐÂY LÀ CHÌA KHÓA!
-                    # Nó cho phép mô hình chạy giống EViews kể cả khi dữ liệu chưa dừng hẳn.
-                    mod = ARIMA(ts_log, order=order, seasonal_order=seasonal_order, 
-                                enforce_stationarity=False, 
-                                enforce_invertibility=False)
-                    res = mod.fit()
-                    
-                    # So sánh AIC (Chỉ số đo độ tốt, càng thấp càng tốt)
-                    if res.aic < best_aic:
-                        best_aic = res.aic
-                        best_model = res
-                except:
-                    continue
-            
-            # Chọn được mô hình tốt nhất thì gán vào biến chính
-            if best_model is not None:
-                arima_fit = best_model
-            else:
-                # Fallback cuối cùng nếu Auto thất bại: ARIMA(1,1,0) cơ bản
-                arima_fit = ARIMA(ts_log, order=(1, 1, 0)).fit()
-
-        except: pass
+        # Cấu hình mạnh mẽ nhất cho dữ liệu điện:
+        # - seasonal='mul': Mùa vụ nhân (Biên độ dao động lớn theo sản lượng)
+        # - trend='add': Xu hướng tăng
+        # - damped_trend=True: Tắt dần xu hướng (Tránh tăng vọt vô lý)
+        # - use_boxcox=True: Tự động chuẩn hóa số liệu cho "mượt"
+        hw_model = ExponentialSmoothing(
+            ts_series, 
+            seasonal_periods=12, 
+            trend='add', 
+            seasonal='mul', 
+            damped_trend=True, 
+            use_boxcox=True
+        )
+        hw_fit = hw_model.fit(optimized=True, remove_bias=True)
+    except: pass
 
     # --- DỰ BÁO ---
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     if len(df_pred) == 0: return None, "File Input rỗng."
 
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
-    
-    # Predict RF & NN
+
+    # Predict ML
     df_pred['RF_Forecast'] = rf.predict(df_pred[valid_features])
     df_pred['NN_Forecast'] = nn.predict(scaler.transform(df_pred[valid_features]))
-
-    # Predict ARIMA (Bung nén Logarit)
-    if arima_fit:
+    
+    # Predict Holt-Winters
+    if hw_fit:
         try:
             steps = len(df_pred)
-            log_forecast = arima_fit.forecast(steps=steps)
-            df_pred['ARIMA_Forecast'] = np.exp(log_forecast).values
-        except: df_pred['ARIMA_Forecast'] = 0
-    else: df_pred['ARIMA_Forecast'] = 0
+            df_pred['HW_Forecast'] = hw_fit.forecast(steps).values
+        except: df_pred['HW_Forecast'] = 0
+    else: df_pred['HW_Forecast'] = 0
 
-    # MERGE & TÍNH SAI SỐ TOÀN DIỆN
+    # Merge Kết quả
     df_actual = df_train[['Năm', 'Tháng', target]].copy()
     df_final = pd.merge(df_pred, df_actual, on=['Năm', 'Tháng'], how='left')
     df_final.rename(columns={target: 'Thuc_te'}, inplace=True)
@@ -183,8 +149,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
 # ==============================================================================
 with st.sidebar:
     st.header("Cấu hình")
-    # Điền sẵn Key của bạn vào đây để đỡ phải nhập lại
-    # Ví dụ: value="AIzaSy..."
+    # Điền Key mặc định của bạn vào đây nếu muốn
     api_key = st.text_input("Gemini API Key", value="", type="password")
 
 col1, col2 = st.columns(2)
@@ -197,30 +162,29 @@ if 'event_list' not in st.session_state: st.session_state.event_list = {}
 c1, c2 = st.columns([2, 1])
 with c1: news = st.text_area("Dán tin tức (Gemini phân tích):", height=80)
 with c2:
-    if st.button("Phân tích"):
+    if st.button("Phân tích ngay"):
         s, e = ask_gemini_to_rate_event(api_key, news)
         if e: st.error(e)
         else: 
             st.session_state.event_list[(2025, 4)] = s
             st.session_state.event_list[(2025, 5)] = s
-            st.success(f"Đánh giá: {s}")
+            st.success(f"Đánh giá tác động: {s}")
 
 # CHẠY DỰ BÁO
 st.write("---")
 if uploaded_train and uploaded_input:
-    if st.button("🚀 CHẠY DỰ BÁO & SO SÁNH", type="primary"):
+    if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
         df_result, err = train_and_predict(uploaded_train, uploaded_input, st.session_state.event_list)
         
         if err: st.error(err)
         else:
             # --- TÍNH TOÁN SAI SỐ CHI TIẾT ---
-            # Chỉ tính với các dòng có số liệu thực tế
             mask = df_result['Thuc_te'].notnull()
             
-            # Tính % Lệch cho từng phương pháp
+            # Tính % Lệch
             df_result['Lệch NN (%)'] = np.where(mask, abs(df_result['Thuc_te'] - df_result['NN_Forecast'])/df_result['Thuc_te']*100, np.nan)
             df_result['Lệch RF (%)'] = np.where(mask, abs(df_result['Thuc_te'] - df_result['RF_Forecast'])/df_result['Thuc_te']*100, np.nan)
-            df_result['Lệch ARIMA (%)'] = np.where(mask, abs(df_result['Thuc_te'] - df_result['ARIMA_Forecast'])/df_result['Thuc_te']*100, np.nan)
+            df_result['Lệch HW (%)'] = np.where(mask, abs(df_result['Thuc_te'] - df_result['HW_Forecast'])/df_result['Thuc_te']*100, np.nan)
 
             # --- TÌM PHƯƠNG PHÁP TỐT NHẤT ---
             def tim_best(row):
@@ -228,28 +192,24 @@ if uploaded_train and uploaded_input:
                 errors = {
                     'Neural Net': row['Lệch NN (%)'],
                     'Random Forest': row['Lệch RF (%)'],
-                    'ARIMA': row['Lệch ARIMA (%)'] if row['ARIMA_Forecast'] > 0 else 999
+                    'Holt-Winters': row['Lệch HW (%)'] if row['HW_Forecast'] > 0 else 999
                 }
-                # Lấy tên phương pháp có sai số nhỏ nhất
                 return min(errors, key=errors.get)
 
             df_result['Tốt nhất'] = df_result.apply(tim_best, axis=1)
 
             # --- HIỂN THỊ BẢNG ---
-            st.subheader("📊 Bảng So Sánh Sai Số Chi Tiết")
+            st.subheader("📊 Bảng Kết Quả & So Sánh")
             
             cols_show = ['Tháng', 'Thuc_te', 
                          'NN_Forecast', 'Lệch NN (%)', 
-                         'RF_Forecast', 'Lệch RF (%)', 
-                         'ARIMA_Forecast', 'Lệch ARIMA (%)', 
+                         'HW_Forecast', 'Lệch HW (%)', 
                          'Tốt nhất']
             
-            # Format bảng
             st.dataframe(df_result[cols_show].style.format({
                 'Thuc_te': '{:,.0f}', 
                 'NN_Forecast': '{:,.0f}', 'Lệch NN (%)': '{:.2f}%',
-                'RF_Forecast': '{:,.0f}', 'Lệch RF (%)': '{:.2f}%',
-                'ARIMA_Forecast': '{:,.0f}', 'Lệch ARIMA (%)': '{:.2f}%'
+                'HW_Forecast': '{:,.0f}', 'Lệch HW (%)': '{:.2f}%'
             }).applymap(lambda x: 'background-color: #d4edda; color: green; font-weight: bold' if isinstance(x, str) and len(x)>0 else '', subset=['Tốt nhất']), 
             use_container_width=True)
 
@@ -257,19 +217,16 @@ if uploaded_train and uploaded_input:
             st.subheader("📈 Biểu Đồ So Sánh")
             fig, ax = plt.subplots(figsize=(14, 7))
             
-            # Vẽ đường thực tế
             if mask.any():
                 ax.plot(df_result.loc[mask, 'Date'], df_result.loc[mask, 'Thuc_te'], 'o-', color='black', linewidth=3, label='Thực Tế')
             
-            # Vẽ 3 đường dự báo
             ax.plot(df_result['Date'], df_result['NN_Forecast'], 's-', color='red', label='Neural Network', alpha=0.8)
-            ax.plot(df_result['Date'], df_result['RF_Forecast'], 'x--', color='blue', label='Random Forest', alpha=0.6)
             
-            # Vẽ ARIMA nếu số liệu hợp lý
-            if df_result['ARIMA_Forecast'].max() > 1000:
-                ax.plot(df_result['Date'], df_result['ARIMA_Forecast'], '^-.', color='green', label='ARIMA (Seasonal)', alpha=0.7)
+            # Vẽ đường Holt-Winters (Màu tím cho khác biệt)
+            if df_result['HW_Forecast'].max() > 0:
+                ax.plot(df_result['Date'], df_result['HW_Forecast'], '^-.', color='purple', label='Holt-Winters (Trend + Season)', alpha=0.8, linewidth=2)
             
-            ax.set_title("So Sánh Các Mô Hình Dự Báo")
+            ax.set_title("So Sánh: Neural Network vs Holt-Winters")
             ax.legend()
             ax.grid(True, linestyle='--', alpha=0.5)
             st.pyplot(fig)
@@ -278,7 +235,4 @@ if uploaded_train and uploaded_input:
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
-            st.download_button("📥 Tải Báo Cáo Chi Tiết", buffer.getvalue(), "Ket_qua_so_sanh.xlsx")
-
-
-
+            st.download_button("📥 Tải Báo Cáo Excel", buffer.getvalue(), "Ket_qua_final.xlsx")
