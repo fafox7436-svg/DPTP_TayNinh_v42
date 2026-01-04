@@ -218,4 +218,3 @@ if uploaded_train and uploaded_input:
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
             st.download_button("📥 Tải Báo Cáo Excel", buffer.getvalue(), "Ket_qua_XGBoost.xlsx")
-
