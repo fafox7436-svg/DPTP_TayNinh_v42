@@ -97,10 +97,11 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     # - n_estimators=1000: Số lượng cây học (nhiều để sửa lỗi kỹ)
     # - learning_rate=0.05: Học chậm thôi để tránh bị vọt số (quan trọng!)
     # - max_depth=3: Cây thấp thôi để tránh học vẹt (overfitting)
-    xgb_model = xgb.XGBRegressor(
-        n_estimators=1000,
-        learning_rate=0.05, 
-        max_depth=3,
+xgb_model = xgb.XGBRegressor(
+        n_estimators=50,       # Giảm từ 1000 xuống 50 (Học ít thôi)
+        learning_rate=0.1,     # Tăng tốc độ học lên chút
+        max_depth=2,           # Cây cực nông (Chỉ được hỏi 2 câu yes/no) -> Tránh học chi tiết thừa
+        subsample=0.7,         # Chỉ dùng 70% dữ liệu để học mỗi lần -> Tạo độ nhiễu để tránh học vẹt
         random_state=42,
         n_jobs=-1
     )
@@ -220,4 +221,5 @@ if uploaded_train and uploaded_input:
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
             st.download_button("📥 Tải Báo Cáo Excel", buffer.getvalue(), "Ket_qua_XGBoost.xlsx")
+
 
