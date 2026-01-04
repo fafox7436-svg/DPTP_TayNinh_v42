@@ -16,24 +16,45 @@ except ImportError:
     HAS_GEMINI = False
 
 # --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="So Sánh 3 Mô Hình (Final)", layout="wide")
+st.set_page_config(page_title="Hệ Thống Dự Báo Thông Minh", layout="wide")
 st.title("⚡ HỆ THỐNG DỰ BÁO")
 st.markdown("So sánh hiệu suất: **Neural Network** vs **Random Forest** vs **XGBoost**.")
 
 # ==============================================================================
-# 1. HÀM GEMINI (SỬ DỤNG MODEL CHUẨN GEMINI-PRO)
+# 1. HÀM GEMINI THÔNG MINH (TỰ ĐỘNG DÒ TÌM MODEL SỐNG)
 # ==============================================================================
 def ask_gemini_to_rate_event(api_key, news_content):
     if not api_key: return None, "Chưa nhập API Key."
-    try:
-        genai.configure(api_key=api_key)
-        # Sử dụng model ổn định nhất hiện nay
-        model = genai.GenerativeModel('gemini-pro')
-        
-        prompt = f"Đánh giá tác động tin tức đến phụ tải điện (-2 đến 2). Tin: '{news_content}'. Trả về 1 số nguyên."
-        response = model.generate_content(prompt)
-        return int(response.text.strip()), None
-    except Exception as e: return 0, str(e)
+    
+    # Danh sách các tên model có thể có (Thử từ mới nhất đến cũ nhất)
+    candidate_models = [
+        "gemini-1.5-flash", 
+        "gemini-1.5-pro", 
+        "gemini-1.0-pro", 
+        "gemini-pro",
+        "models/gemini-1.5-flash",
+        "models/gemini-pro"
+    ]
+    
+    genai.configure(api_key=api_key)
+    
+    last_error = ""
+    
+    # Vòng lặp thử từng model
+    for model_name in candidate_models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            prompt = f"Đánh giá tác động tin tức đến phụ tải điện (-2 đến 2). Tin: '{news_content}'. Trả về 1 số nguyên."
+            response = model.generate_content(prompt)
+            # Nếu chạy đến đây là thành công, trả về kết quả ngay
+            return int(response.text.strip()), None
+        except Exception as e:
+            # Nếu lỗi, lưu lại lỗi và thử model tiếp theo
+            last_error = str(e)
+            continue
+            
+    # Nếu thử hết danh sách mà vẫn lỗi
+    return 0, f"Không tìm thấy model phù hợp. Lỗi cuối cùng: {last_error}"
 
 # ==============================================================================
 # 2. HÀM XỬ LÝ SỐ LIỆU
@@ -57,7 +78,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     except: df_train = pd.read_excel(file_train, sheet_name=0)
     df_input = pd.read_excel(file_input)
 
-    # Xử lý sự kiện từ Gemini
+    # Xử lý sự kiện
     use_event = False
     if manual_events_dict and any(v != 0 for v in manual_events_dict.values()):
         use_event = True
@@ -70,7 +91,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     df_train = them_yeu_to_mua(df_train)
     df_input = them_yeu_to_mua(df_input)
 
-    # Chọn Features
+    # Features
     if use_event:
         features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 'Co_Tet', 'Mua_Nong', 'Mua_Mua', 'Su_Kien']
     else:
@@ -79,7 +100,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     valid_features = [f for f in features if f in df_train.columns and f in df_input.columns]
     target = 'Tổng thương phẩm'
 
-    # Làm sạch dữ liệu train
+    # Data Clean
     data_clean = df_train.dropna(subset=valid_features + [target]).copy()
     X = data_clean[valid_features]
     y = data_clean[target]
@@ -95,12 +116,12 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
     nn.fit(X_scaled, y)
     
-    # --- MODEL 3: XGBOOST (Cấu hình chuẩn sai số thật) ---
+    # --- MODEL 3: XGBOOST (Cấu hình "Anti-Overfitting") ---
     xgb_model = xgb.XGBRegressor(
-        n_estimators=50,       # Số cây ít để tránh học vẹt
-        learning_rate=0.1,     # Tốc độ học vừa phải
-        max_depth=2,           # Cây nông (chỉ học quy luật chính)
-        subsample=0.7,         # Che bớt dữ liệu khi học
+        n_estimators=50,       # Ít cây để tránh học vẹt
+        learning_rate=0.1,     # Học chậm
+        max_depth=2,           # Cây nông (chỉ học ý chính)
+        subsample=0.7,         # Che 30% dữ liệu khi học
         random_state=42,
         n_jobs=-1
     )
@@ -112,12 +133,12 @@ def train_and_predict(file_train, file_input, manual_events_dict):
 
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
 
-    # Chạy dự báo
+    # Predict
     df_pred['RF_Forecast'] = rf.predict(df_pred[valid_features])
     df_pred['NN_Forecast'] = nn.predict(scaler.transform(df_pred[valid_features]))
     df_pred['XGB_Forecast'] = xgb_model.predict(df_pred[valid_features])
 
-    # Gộp kết quả
+    # Merge
     df_actual = df_train[['Năm', 'Tháng', target]].copy()
     df_final = pd.merge(df_pred, df_actual, on=['Năm', 'Tháng'], how='left')
     df_final.rename(columns={target: 'Thuc_te'}, inplace=True)
@@ -126,7 +147,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     return df_final, None
 
 # ==============================================================================
-# GIAO DIỆN CHÍNH
+# GIAO DIỆN
 # ==============================================================================
 with st.sidebar:
     st.header("Cấu hình")
@@ -137,20 +158,23 @@ with col1: uploaded_train = st.file_uploader("1. File Lịch Sử (Train)", type
 with col2: uploaded_input = st.file_uploader("2. File Dự Báo (Input)", type=['xlsx', 'xls'])
 
 st.write("---")
-# Phần Tin tức Gemini
+# Tin tức Gemini
 if 'event_list' not in st.session_state: st.session_state.event_list = {}
 c1, c2 = st.columns([2, 1])
 with c1: news = st.text_area("Nhập nội dung tin tức:", height=80)
 with c2:
     if st.button("Phân tích"):
-        s, e = ask_gemini_to_rate_event(api_key, news)
-        if e: st.error(e)
+        # Code mới sẽ tự động thử các model đến khi nào được thì thôi
+        with st.spinner("Đang thử kết nối Gemini..."):
+            s, e = ask_gemini_to_rate_event(api_key, news)
+        
+        if e: st.error(f"Lỗi: {e}")
         else: 
             st.session_state.event_list[(2025, 4)] = s
             st.session_state.event_list[(2025, 5)] = s
-            st.success(f"Kết quả: {s}")
+            st.success(f"Đã kết nối thành công! Đánh giá: {s}")
 
-# Nút Chạy Dự Báo
+# Nút chạy
 st.write("---")
 if uploaded_train and uploaded_input:
     if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
