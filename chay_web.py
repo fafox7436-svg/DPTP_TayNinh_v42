@@ -27,7 +27,6 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     if not api_key: return 0, "⚠️ Chưa nhập khóa API. Giá trị mặc định là 0."
     try:
         genai.configure(api_key=api_key)
-        # Tự động dò tìm model
         candidate_models = ["gemini-1.5-flash", "gemini-pro", "gemini-1.0-pro"]
         final_model = "gemini-pro"
         try:
@@ -48,7 +47,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     except Exception as e: return 0, f"❌ Lỗi xử lý: {str(e)}"
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (TRẢ VỀ CẤU HÌNH CŨ 10-15-10)
+# 2. HÀM TÍNH TOÁN (ĐÃ KHÔI PHỤC LOGIC SCALE Y ĐỂ RA SỐ 749tr)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -80,36 +79,44 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
 
     data_clean = df_train.dropna(subset=valid_features + [target]).copy()
     X = data_clean[valid_features]
-    y = data_clean[target]
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    y = data_clean[[target]] # Giữ dạng DataFrame để Scale
 
-    # --- 1. NEURAL NETWORK (CẤU HÌNH CŨ - KHÔI PHỤC LẠI) ---
-    # Đã trả về (10, 15, 10) và solver='lbfgs' để ra số 749tr như cũ
+    # --- KHÔI PHỤC BƯỚC SCALE Y (CHÌA KHÓA ĐỂ RA SỐ 749tr) ---
+    scaler_X = StandardScaler()
+    scaler_y = StandardScaler() # Thêm scaler cho Y
+
+    X_scaled = scaler_X.fit_transform(X)
+    y_scaled = scaler_y.fit_transform(y).ravel() # Chuyển về mảng 1 chiều
+
+    # --- 1. NEURAL NETWORK (CẤU HÌNH GỐC) ---
     nn = MLPRegressor(
         hidden_layer_sizes=(10, 15, 10), 
         activation='relu', 
         solver='lbfgs', 
         max_iter=5000, 
-        random_state=0
+        random_state=0 # Giữ nguyên random_state
     )
-    nn.fit(X_scaled, y)
+    nn.fit(X_scaled, y_scaled) # Train trên dữ liệu đã scale
     
     # --- 2. RANDOM FOREST ---
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
-    rf.fit(X, y)
+    rf.fit(X, y.values.ravel()) # RF không cần scale Y
 
     # --- 3. XGBOOST ---
     xgb_model = xgb.XGBRegressor(n_estimators=50, learning_rate=0.1, max_depth=2, subsample=0.7, random_state=42, n_jobs=-1)
-    xgb_model.fit(X, y)
+    xgb_model.fit(X, y.values.ravel()) # XGB không cần scale Y
 
-    # Dự báo
+    # DỰ BÁO
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
     suffix = "" if scenario_label == "Final" else f"_{scenario_label}"
     
-    df_pred[f'NN{suffix}'] = nn.predict(scaler.transform(df_pred[valid_features]))
+    # Predict NN (Phải inverse_transform để trả về số thực)
+    pred_nn_scaled = nn.predict(scaler_X.transform(df_pred[valid_features]))
+    df_pred[f'NN{suffix}'] = scaler_y.inverse_transform(pred_nn_scaled.reshape(-1, 1)).ravel()
+
+    # Predict RF & XGB (Dự báo thẳng)
     df_pred[f'RF{suffix}'] = rf.predict(df_pred[valid_features]) 
     df_pred[f'XGB{suffix}'] = xgb_model.predict(df_pred[valid_features])
     
@@ -200,13 +207,10 @@ if uploaded_train and uploaded_input:
                 st.subheader("📈 Biểu Đồ So Sánh 3 Phương Pháp")
                 fig, ax = plt.subplots(figsize=(14, 7))
                 
-                # Neural Network
                 ax.plot(df_final['ThoiGian'], df_final['NN'], 's-', color='#d62728', label='Neural Network', linewidth=2, alpha=0.8)
-                # Random Forest
                 ax.plot(df_final['ThoiGian'], df_final['RF'], 'x--', color='#1f77b4', label='Random Forest', linewidth=1.5, alpha=0.7)
-                # XGBoost
                 ax.plot(df_final['ThoiGian'], df_final['XGB'], '^-.', color='#2ca02c', label='XGBoost', linewidth=2, alpha=0.9)
-                # Thực tế
+
                 if df_final['Thuc_te'].notnull().any():
                     ax.plot(df_final['ThoiGian'], df_final['Thuc_te'], 'o-', color='black', linewidth=3, label='Thực Tế', zorder=10)
 
@@ -216,7 +220,6 @@ if uploaded_train and uploaded_input:
                 ax.grid(True, linestyle=':', alpha=0.6)
                 st.pyplot(fig)
                 
-                # Nút tải về
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_show.to_excel(writer, index=False, sheet_name='Ket_qua')
@@ -224,4 +227,3 @@ if uploaded_train and uploaded_input:
 
         except Exception as e:
             st.error(f"❌ Lỗi: {e}")
-
