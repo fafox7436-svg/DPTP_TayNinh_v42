@@ -17,7 +17,7 @@ except ImportError:
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Hệ Thống Dự Báo Phụ Tải", layout="wide")
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH LONG AN")
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN")
 st.markdown("---")
 
 # ==============================================================================
@@ -292,3 +292,4 @@ if uploaded_train and uploaded_input:
 
         except Exception as e:
             st.error(f"❌ Lỗi: {e}")
+
