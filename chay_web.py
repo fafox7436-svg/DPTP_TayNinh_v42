@@ -153,7 +153,7 @@ with c2:
 # Nút chạy
 st.write("---")
 if uploaded_train and uploaded_input:
-    if st.button("🚀 CHẠY SO SÁNH (CÓ XGBOOST)", type="primary"):
+    if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
         df_result, err = train_and_predict(uploaded_train, uploaded_input, st.session_state.event_list)
         
         if err: st.error(err)
@@ -220,3 +220,4 @@ if uploaded_train and uploaded_input:
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
             st.download_button("📥 Tải Báo Cáo Excel", buffer.getvalue(), "Ket_qua_XGBoost.xlsx")
+
