@@ -21,8 +21,8 @@ except ImportError:
     HAS_GEMINI = False
 
 # --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="Hệ Thống Dự Báo Ổn Định", layout="wide")
-st.title("⚡ HỆ THỐNG DỰ BÁO PHỤ TẢI (BẢN ỔN ĐỊNH)")
+st.set_page_config(page_title="Hệ Thống Dự Báo", layout="wide")
+st.title("⚡ HỆ THỐNG DỰ BÁO PHỤ TẢI")
 
 # ==============================================================================
 # 1. HÀM GEMINI
@@ -162,7 +162,7 @@ st.write("---")
 if 'event_list' not in st.session_state: st.session_state.event_list = {}
 
 c1, c2 = st.columns([2, 1])
-with c1: news = st.text_area("Dán tin tức (Nếu có):", height=80, placeholder="Nếu không nhập gì, kết quả sẽ giống hệt bản chuẩn cũ.")
+with c1: news = st.text_area("Dán tin tức (Nếu có):", height=80, placeholder="Thông tin ảnh hưởng đến nhu cầu phụ tải.")
 with c2:
     if st.button("Phân tích tin tức"):
         s, e = ask_gemini_to_rate_event(api_key, news)
@@ -209,3 +209,4 @@ if uploaded_train and uploaded_input:
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
             st.download_button("Tải Excel", buffer.getvalue(), "Ket_qua.xlsx")
+
