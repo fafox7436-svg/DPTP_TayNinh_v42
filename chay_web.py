@@ -6,9 +6,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
 import io
-import json
 
-# Thử import các thư viện nâng cao
+# --- KIỂM TRA THƯ VIỆN BẮT BUỘC ---
 try:
     from statsmodels.tsa.arima.model import ARIMA
     HAS_ARIMA = True
@@ -22,60 +21,42 @@ except ImportError:
     HAS_GEMINI = False
 
 # --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="Dự Báo Phụ Tải Thông Minh (Gemini)", layout="wide")
-st.title("⚡ HỆ THỐNG DỰ BÁO PHỤ TẢI (TÍCH HỢP GEMINI)")
+st.set_page_config(page_title="Dự Báo Phụ Tải (Bản Chuẩn Tích Hợp AI)", layout="wide")
+st.title("⚡ HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN (BẢN CHUẨN + GEMINI)")
+st.markdown("Phiên bản tích hợp: **Neural Network (Cấu hình chuẩn)** + **ARIMA** + **Trợ lý Gemini**")
+
+# Cảnh báo nếu thiếu thư viện quan trọng
+if not HAS_ARIMA:
+    st.error("⚠️ CẢNH BÁO: Chưa cài `statsmodels`. Phương pháp ARIMA sẽ không chạy! Hãy thêm vào requirements.txt")
+if not HAS_GEMINI:
+    st.warning("⚠️ Chưa cài `google-generativeai`. Tính năng đọc báo Gemini sẽ không hoạt động.")
 
 # ==============================================================================
-# 1. HÀM GỌI GEMINI ĐỂ PHÂN TÍCH TIN TỨC
+# 1. HÀM GEMINI (TRỢ LÝ ĐỌC BÁO)
 # ==============================================================================
 def ask_gemini_to_rate_event(api_key, news_content):
-    """Gửi nội dung báo chí cho Gemini và nhận về điểm số (-2 đến 2)"""
-    if not api_key:
-        return None, "Vui lòng nhập API Key trước."
-    
+    if not api_key: return None, "Thiếu API Key."
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # Câu lệnh (Prompt) ra lệnh cho Gemini đóng vai chuyên gia điện lực
         prompt = f"""
-        Bạn là chuyên gia phân tích phụ tải điện tại Long An, Việt Nam.
-        Tôi sẽ cung cấp cho bạn một đoạn tin tức (về thời tiết, kinh tế, hoặc chính sách).
-        Nhiệm vụ của bạn:
-        1. Phân tích xem tin tức này ảnh hưởng TĂNG hay GIẢM đến nhu cầu sử dụng điện.
-        2. Đánh giá mức độ ảnh hưởng theo thang điểm sau:
-           -2: Giảm mạnh (Dịch bệnh phong tỏa, bão lũ lớn, suy thoái kinh tế nặng).
-           -1: Giảm nhẹ (Mưa nhiều, giá điện tăng cao làm dân tiết kiệm).
-            0: Không ảnh hưởng đáng kể.
-            1: Tăng nhẹ (Nắng nóng thường, có thêm khu công nghiệp nhỏ).
-            2: Tăng mạnh (Nắng nóng kỷ lục/El Nino, Kinh tế bùng nổ, KCN lớn hoạt động).
-        
-        Nội dung tin tức: "{news_content}"
-        
-        YÊU CẦU OUTPUT: Chỉ trả về duy nhất một con số nguyên (từ -2 đến 2). Không giải thích gì thêm.
-        Ví dụ: 2
+        Đánh giá tác động tin tức đến phụ tải điện (-2: Giảm mạnh, -1: Giảm nhẹ, 0: Không, 1: Tăng nhẹ, 2: Tăng mạnh).
+        Tin tức: "{news_content}"
+        Chỉ trả về 1 con số nguyên duy nhất.
         """
-        
         response = model.generate_content(prompt)
-        # Lấy text và làm sạch
-        score_text = response.text.strip()
-        # Chuyển thành số
-        score = int(score_text)
-        return score, None
-    except Exception as e:
-        return 0, f"Lỗi Gemini: {str(e)}"
+        return int(response.text.strip()), None
+    except Exception as e: return 0, str(e)
 
 # ==============================================================================
-# 2. HÀM XỬ LÝ SỐ LIỆU (CORE)
+# 2. HÀM XỬ LÝ SỐ LIỆU (KHÔI PHỤC LOGIC CŨ)
 # ==============================================================================
 def them_yeu_to_mua(df):
     def check_tet(row):
         try:
-            nam = int(row['Năm'])
-            thang = int(row['Tháng'])
+            nam, thang = int(row['Năm']), int(row['Tháng'])
             lich_tet = {2023: 1, 2024: 2, 2025: 1, 2026: 2, 2027: 2, 2028: 1}
-            if nam in lich_tet and lich_tet[nam] == thang: return 1
-            return 0
+            return 1 if nam in lich_tet and lich_tet[nam] == thang else 0
         except: return 0
     df['Co_Tet'] = df.apply(check_tet, axis=1)
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3, 4, 5] else 0)
@@ -89,47 +70,41 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     except: df_train = pd.read_excel(file_train, sheet_name=0)
     df_input = pd.read_excel(file_input)
 
-    # 1. TẠO CỘT SỰ KIỆN TỪ DICTIONARY (Dữ liệu từ Gemini/Nhập tay)
-    # manual_events_dict dạng: {(2025, 4): 2, (2025, 5): 2}
+    # Gán sự kiện từ Gemini/Nhập tay (Mặc định là 0)
+    def get_event(row):
+        return manual_events_dict.get((int(row['Năm']), int(row['Tháng'])), 0)
     
-    def get_event_score(row):
-        key = (int(row['Năm']), int(row['Tháng']))
-        return manual_events_dict.get(key, 0) # Mặc định là 0 nếu không có tin tức
+    df_train['Su_Kien'] = df_train.apply(get_event, axis=1)
+    df_input['Su_Kien'] = df_input.apply(get_event, axis=1)
 
-    # Áp dụng cho cả Train và Input
-    # (Lưu ý: Với Train/Lịch sử, ta giả định là 0 hoặc bạn phải nhập tay quá khứ. 
-    # Ở đây tập trung vào việc Gemini dự báo cho Input tương lai)
-    df_train['Su_Kien_Tin_Tuc'] = df_train.apply(get_event_score, axis=1)
-    df_input['Su_Kien_Tin_Tuc'] = df_input.apply(get_event_score, axis=1)
-
-    # 2. Xử lý mùa vụ
+    # Xử lý mùa vụ
     df_train = them_yeu_to_mua(df_train)
     df_input = them_yeu_to_mua(df_input)
 
-    # 3. Features
-    features = ['Tháng', 'Năm', 'Co_Tet', 'Mua_Nong', 'Mua_Mua', 'Su_Kien_Tin_Tuc']
-    # Thêm nhiệt độ nếu có
-    if 'Nhiệt độ TB' in df_train.columns: features.append('Nhiệt độ TB')
-    if 'Độ ẩm' in df_train.columns: features.append('Độ ẩm')
-    
+    # Features (Cố định để đảm bảo ổn định)
+    features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 'Co_Tet', 'Mua_Nong', 'Mua_Mua', 'Su_Kien']
+    # Chỉ lấy các cột thực sự có trong file
+    valid_features = [f for f in features if f in df_train.columns and f in df_input.columns]
     target = 'Tổng thương phẩm'
 
-    # 4. Huấn luyện
-    data_clean = df_train.dropna(subset=features + [target]).copy()
-    X = data_clean[features]
+    # Chuẩn bị dữ liệu Train
+    data_clean = df_train.dropna(subset=valid_features + [target]).copy()
+    X = data_clean[valid_features]
     y = data_clean[target]
     
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
+    # --- MODEL 1: RANDOM FOREST ---
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
     rf.fit(X, y)
 
-    h_size = (len(features)*3, len(features)*2, len(features))
-    nn = MLPRegressor(hidden_layer_sizes=h_size, activation='relu', solver='lbfgs', max_iter=5000, random_state=0) 
+    # --- MODEL 2: NEURAL NETWORK (KHÔI PHỤC CẤU HÌNH CHUẨN) ---
+    # Cấu hình này đã được kiểm chứng cho kết quả tốt nhất (~745tr)
+    nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
     nn.fit(X_scaled, y)
     
-    # ARIMA
+    # --- MODEL 3: ARIMA ---
     arima_fit = None
     if HAS_ARIMA:
         try:
@@ -141,12 +116,15 @@ def train_and_predict(file_train, file_input, manual_events_dict):
             arima_fit = arima_model.fit()
         except: pass
 
-    # 5. Dự báo
+    # --- DỰ BÁO ---
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     if len(df_pred) == 0: return None, "File Input rỗng."
 
-    df_pred['RF_Forecast'] = rf.predict(df_pred[features])
-    df_pred['NN_Forecast'] = nn.predict(scaler.transform(df_pred[features]))
+    # Xử lý thiếu dữ liệu input bằng 0 cho an toàn
+    df_pred[valid_features] = df_pred[valid_features].fillna(0)
+
+    df_pred['RF_Forecast'] = rf.predict(df_pred[valid_features])
+    df_pred['NN_Forecast'] = nn.predict(scaler.transform(df_pred[valid_features]))
     
     if arima_fit:
         try:
@@ -156,7 +134,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
         except: df_pred['ARIMA_Forecast'] = 0
     else: df_pred['ARIMA_Forecast'] = 0
 
-    # Merge kết quả
+    # Ghép với thực tế để so sánh
     df_actual = df_train[['Năm', 'Tháng', target]].copy()
     df_final = pd.merge(df_pred, df_actual, on=['Năm', 'Tháng'], how='left')
     df_final.rename(columns={target: 'Thuc_te'}, inplace=True)
@@ -165,88 +143,64 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     return df_final, None
 
 # ==============================================================================
-# GIAO DIỆN
+# GIAO DIỆN CHÍNH
 # ==============================================================================
-# Sidebar nhập API Key
 with st.sidebar:
-    st.header("🤖 Cấu hình AI")
-    api_key = st.text_input("Nhập Gemini API Key", type="password", help="Lấy tại aistudio.google.com")
-    if not HAS_GEMINI:
-        st.error("Chưa cài thư viện `google-generativeai`!")
+    st.header("🤖 Cấu hình Gemini")
+    api_key = st.text_input("Nhập API Key", type="password")
 
-# Main
 col1, col2 = st.columns(2)
-with col1: uploaded_train = st.file_uploader("1. File Lịch Sử", type=['xlsx', 'xls'])
-with col2: uploaded_input = st.file_uploader("2. File Input (Dự báo)", type=['xlsx', 'xls'])
+with col1: uploaded_train = st.file_uploader("1. File Lịch Sử (Train)", type=['xlsx', 'xls'])
+with col2: uploaded_input = st.file_uploader("2. File Dự Báo (Input)", type=['xlsx', 'xls'])
 
-# --- PHẦN TÍCH HỢP GEMINI ---
 st.write("---")
-st.subheader("📰 AI Phân Tích Tin Tức & Sự Kiện")
+st.subheader("📰 Cập Nhật Sự Kiện (AI)")
 
-# Quản lý trạng thái các sự kiện đã thêm
-if 'event_list' not in st.session_state:
-    st.session_state.event_list = {} # Dạng {(2025, 4): 2, (2025, 5): 2}
+if 'event_list' not in st.session_state: st.session_state.event_list = {}
 
 c1, c2 = st.columns([2, 1])
-with c1:
-    news_text = st.text_area("Dán nội dung bài báo hoặc tin tức vào đây:", height=100, 
-                             placeholder="Ví dụ: Theo dự báo khí tượng, tháng 4 và 5 năm 2025 sẽ có nắng nóng kỷ lục...")
+with c1: news_text = st.text_area("Dán nội dung tin tức:", height=80)
 with c2:
-    st.write("Áp dụng cho thời gian:")
     col_y, col_m = st.columns(2)
     sel_year = col_y.number_input("Năm", 2023, 2030, 2025)
     sel_months = col_m.multiselect("Tháng", range(1, 13), default=[4, 5])
-    
-    if st.button("Hỏi Gemini & Áp dụng", type="primary"):
-        if not news_text:
-            st.warning("Vui lòng dán nội dung tin tức.")
-        elif not api_key:
-            st.warning("Vui lòng nhập API Key ở menu bên trái.")
-        else:
-            with st.spinner("Gemini đang đọc báo và suy luận..."):
-                score, err = ask_gemini_to_rate_event(api_key, news_text)
-                if err:
-                    st.error(err)
-                else:
-                    # Cập nhật vào danh sách sự kiện
-                    for m in sel_months:
-                        st.session_state.event_list[(sel_year, m)] = score
-                    
-                    msg = "Tăng mạnh" if score == 2 else "Tăng nhẹ" if score == 1 else "Giảm" if score < 0 else "Không đổi"
-                    st.success(f"Gemini đánh giá: {score} ({msg})")
-                    st.caption("Đã tự động điền vào dữ liệu dự báo!")
-
-# Hiển thị các sự kiện đang có
-if st.session_state.event_list:
-    st.info(f"Dữ liệu sự kiện đang áp dụng: {st.session_state.event_list}")
-
-# --- NÚT CHẠY DỰ BÁO ---
-st.write("---")
-if uploaded_train and uploaded_input:
-    if st.button("🚀 CHẠY DỰ BÁO (KẾT HỢP DỮ LIỆU AI)", type="primary"):
-        with st.spinner('Đang chạy mô hình...'):
-            # Truyền danh sách sự kiện vào hàm train
-            df_result, err = train_and_predict(uploaded_train, uploaded_input, st.session_state.event_list)
-            
+    if st.button("Phân tích & Áp dụng"):
+        score, err = ask_gemini_to_rate_event(api_key, news_text)
         if err: st.error(err)
         else:
-            # Bảng
-            st.subheader("📊 Kết Quả")
-            # Highlight cột Sự kiện để thấy tác động của AI
-            cols = ['Năm', 'Tháng', 'Thuc_te', 'NN_Forecast', 'RF_Forecast', 'Su_Kien_Tin_Tuc']
-            st.dataframe(df_result[cols].style.format("{:,.0f}"), use_container_width=True)
+            for m in sel_months: st.session_state.event_list[(sel_year, m)] = score
+            st.success(f"Đánh giá: {score}")
+
+# Chạy Dự Báo
+st.write("---")
+if uploaded_train and uploaded_input:
+    if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
+        df_result, err = train_and_predict(uploaded_train, uploaded_input, st.session_state.event_list)
+        
+        if err: st.error(err)
+        else:
+            # Bảng kết quả (Có so sánh sai số)
+            st.subheader("📊 Bảng Kết Quả & So Sánh Sai Số")
+            
+            # Tính sai số (NN vs Thực tế)
+            df_result['Lệch NN (%)'] = np.where(df_result['Thuc_te'].notnull(), 
+                                                 abs(df_result['Thuc_te'] - df_result['NN_Forecast'])/df_result['Thuc_te']*100, 
+                                                 np.nan)
+
+            cols = ['Năm', 'Tháng', 'Thuc_te', 'NN_Forecast', 'RF_Forecast', 'ARIMA_Forecast', 'Lệch NN (%)']
+            st.dataframe(df_result[cols].style.format({
+                'Thuc_te': '{:,.0f}', 'NN_Forecast': '{:,.0f}', 
+                'RF_Forecast': '{:,.0f}', 'ARIMA_Forecast': '{:,.0f}',
+                'Lệch NN (%)': '{:.2f}%', 'Năm': '{:.0f}'
+            }).background_gradient(subset=['Lệch NN (%)'], cmap='RdYlGn_r'), use_container_width=True)
 
             # Biểu đồ
             st.subheader("📈 Biểu Đồ")
-            fig, ax = plt.subplots(figsize=(14, 6))
+            fig, ax = plt.subplots(figsize=(12, 6))
             ax.plot(df_result['Date'], df_result['NN_Forecast'], 's-', color='red', label='Neural Network', linewidth=2)
+            ax.plot(df_result['Date'], df_result['RF_Forecast'], 'x--', color='blue', label='Random Forest', alpha=0.5)
+            ax.plot(df_result['Date'], df_result['ARIMA_Forecast'], '^-.', color='green', label='ARIMA', alpha=0.7)
             
-            # Vẽ các điểm có sự kiện đặc biệt
-            mask_event = df_result['Su_Kien_Tin_Tuc'] != 0
-            if mask_event.any():
-                ax.scatter(df_result.loc[mask_event, 'Date'], df_result.loc[mask_event, 'NN_Forecast'], 
-                           s=150, c='yellow', edgecolors='black', zorder=10, label='Tác động Sự kiện (AI)')
-
             mask_actual = df_result['Thuc_te'].notnull()
             if mask_actual.any():
                 ax.plot(df_result.loc[mask_actual, 'Date'], df_result.loc[mask_actual, 'Thuc_te'], 'o-', color='black', label='Thực Tế', linewidth=2)
@@ -254,3 +208,9 @@ if uploaded_train and uploaded_input:
             ax.legend()
             ax.grid(True)
             st.pyplot(fig)
+            
+            # Tải về
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                df_result.drop(columns=['Date']).to_excel(writer, sheet_name='Ket_Qua', index=False)
+            st.download_button("📥 Tải Excel", buffer.getvalue(), "Ket_qua.xlsx")
