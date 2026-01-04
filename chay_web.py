@@ -20,13 +20,15 @@ st.title("⚡ HỆ THỐNG DỰ BÁO")
 st.markdown("So sánh hiệu suất: **Neural Network** vs **Random Forest** vs **XGBoost**.")
 
 # ==============================================================================
-# 1. HÀM GEMINI
+# 1. HÀM GEMINI (ĐÃ SỬA LỖI MODEL SANG GEMINI-PRO)
 # ==============================================================================
 def ask_gemini_to_rate_event(api_key, news_content):
     if not api_key: return None, "Chưa nhập API Key."
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # SỬA LỖI QUAN TRỌNG: Dùng 'gemini-pro' thay vì 'gemini-1.5-flash'
+        model = genai.GenerativeModel('gemini-pro')
+        
         prompt = f"Đánh giá tác động tin tức đến phụ tải điện (-2 đến 2). Tin: '{news_content}'. Trả về 1 số nguyên."
         response = model.generate_content(prompt)
         return int(response.text.strip()), None
@@ -92,8 +94,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
     nn.fit(X_scaled, y)
     
-    # --- MODEL 3: XGBOOST (Cấu hình chống Overfitting) ---
-    # Đã chỉnh thụt lề chuẩn xác
+    # --- MODEL 3: XGBOOST (Cấu hình chống Overfitting - Sai số thật) ---
     xgb_model = xgb.XGBRegressor(
         n_estimators=50,       # Giảm số cây để tránh học vẹt
         learning_rate=0.1,     # Tăng tốc độ học
