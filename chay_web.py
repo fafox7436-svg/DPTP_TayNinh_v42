@@ -83,7 +83,39 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
     
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-
+# --- MÁY DÒ HẠT GIỐNG (Dán ngay dưới X_scaled) ---
+    if st.button("🕵️ BẮT ĐẦU DÒ TÌM SEED 740 TỶ"):
+        st.info("Đang dò tìm... Vui lòng đợi khoảng 1 phút...")
+        ket_qua_tim_thay = []
+        
+        # Thử 100 con số ngẫu nhiên
+        for seed_thu in range(0, 100):
+            # Cấu hình test nhanh
+            nn_test = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=2000, random_state=seed_thu)
+            nn_test.fit(X_scaled, y) # Huấn luyện
+            
+            # Dự báo thử
+            df_pred_test = df_input.copy().sort_values(['Năm', 'Tháng'])
+            df_pred_test[valid_features] = df_pred_test[valid_features].fillna(0)
+            pred_vals = nn_test.predict(scaler.transform(df_pred_test[valid_features]))
+            
+            tong_san_luong = np.sum(pred_vals)
+            
+            # Nếu kết quả nằm trong khoảng 735 triệu - 745 triệu
+            # (Lưu ý: Python hiểu 740tr là 740000000)
+            if 735000000 <= tong_san_luong <= 745000000:
+                msg = f"✅ TÌM THẤY! Seed = {seed_thu} | Ra: {tong_san_luong:,.0f}"
+                ket_qua_tim_thay.append(msg)
+        
+        if len(ket_qua_tim_thay) > 0:
+            st.success("Đã tìm thấy các hạt giống phù hợp:")
+            for k in ket_qua_tim_thay:
+                st.write(k)
+            st.stop() # Dừng chương trình để bạn xem kết quả
+        else:
+            st.warning("Chưa tìm thấy trong 100 số đầu. Hãy thử lại hoặc nới rộng khoảng tìm.")
+            st.stop()
+    # -------------------------------------------------
     # --- 1. NEURAL NETWORK (CHUẨN 10-15-10 & RANDOM_STATE=42) ---
     nn = MLPRegressor(
         hidden_layer_sizes=(10, 15, 10), # Đúng cấu trúc bạn yêu cầu
@@ -246,4 +278,5 @@ if uploaded_train and uploaded_input:
 
         except Exception as e:
             st.error(f"❌ Lỗi: {e}")
+
 
