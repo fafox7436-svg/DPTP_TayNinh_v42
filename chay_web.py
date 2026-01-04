@@ -47,7 +47,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     except Exception as e: return 0, f"❌ Lỗi xử lý: {str(e)}"
 
 # ==============================================================================
-# 2. HÀM XỬ LÝ DỮ LIỆU CHUNG
+# 2. HÀM CHUẨN BỊ DỮ LIỆU
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -62,7 +62,6 @@ def feature_engineering(df):
     return df
 
 def prepare_data(df_train_origin, df_input_origin, exogenous_params):
-    """Hàm phụ trợ để chuẩn bị dữ liệu cho việc training và dò tìm"""
     df_train = df_train_origin.copy()
     df_input = df_input_origin.copy()
 
@@ -100,7 +99,7 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
         activation='relu', 
         solver='lbfgs', 
         max_iter=5000, 
-        random_state=user_seed # Sử dụng Seed do người dùng chọn
+        random_state=user_seed # <--- QUAN TRỌNG: Seed do người dùng chọn
     )
     nn.fit(X_scaled, y)
     
@@ -133,11 +132,15 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("🛠️ Công Cụ Dò Seed")
-    # Ô nhập Seed để người dùng tự chỉnh sau khi tìm được
-    selected_seed = st.number_input("Chọn Random Seed (Mặc định 42)", value=42, step=1)
-    target_value = st.number_input("Mục tiêu sản lượng (triệu kWh)", value=740)
     
-    do_tim = st.checkbox("Bật chế độ Dò Tìm")
+    # Ô nhập Seed quan trọng
+    selected_seed = st.number_input("Chọn Random Seed", value=42, step=1, help="Nhập số tìm được vào đây để khóa kết quả.")
+    
+    # Checkbox bật/tắt chế độ dò
+    do_tim = st.checkbox("Bật chế độ Dò Tìm (Quét 1000 số)")
+    
+    if do_tim:
+        target_value = st.number_input("Mục tiêu (Triệu kWh)", value=740)
 
 col1, col2 = st.columns(2)
 with col1: uploaded_train = st.file_uploader("1. Dữ liệu Lịch sử (Train)", type=['xlsx', 'xls'])
@@ -164,28 +167,31 @@ if st.session_state.param_dict:
 st.write("---")
 
 if uploaded_train and uploaded_input:
-    # Đọc dữ liệu trước
+    # Đọc dữ liệu
     try: df_train_org = pd.read_excel(uploaded_train, sheet_name='Bang tinh 5 tppt')
     except: df_train_org = pd.read_excel(uploaded_train, sheet_name=0)
     df_input_org = pd.read_excel(uploaded_input)
 
-    # --- LOGIC DÒ TÌM SEED (NẰM Ở ĐÂY LÀ AN TOÀN NHẤT) ---
+    # --- PHẦN MÁY DÒ (CHỈ CHẠY KHI TICK CHỌN) ---
     if do_tim:
-        if st.button("🕵️ BẮT ĐẦU QUÉT SEED"):
-            st.info(f"Đang tìm hạt giống cho kết quả gần {target_value} triệu kWh...")
+        if st.button("🕵️ BẮT ĐẦU QUÉT (0 - 1000)"):
+            st.info(f"Đang quét 1000 hạt giống để tìm kết quả ~{target_value} triệu kWh... (Mất khoảng 2 phút)")
             
-            # Chuẩn bị dữ liệu cục bộ
+            # Chuẩn bị dữ liệu
             X, y, X_scaled, scaler, valid_features, df_input_ready = prepare_data(df_train_org, df_input_org, st.session_state.param_dict)
             
             found_list = []
-            progress_bar = st.progress(0)
+            my_bar = st.progress(0)
             
-            # Quét 100 số
-            for seed_i in range(0, 100):
-                progress_bar.progress(seed_i + 1)
+            # QUÉT TỪ 0 ĐẾN 1000
+            scan_range = 1000
+            for seed_i in range(0, scan_range):
+                # Cập nhật thanh tiến trình mỗi 10 số để đỡ lag
+                if seed_i % 10 == 0:
+                    my_bar.progress(int((seed_i / scan_range) * 100))
                 
                 # Train nhanh
-                nn_temp = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=2000, random_state=seed_i)
+                nn_temp = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=1500, random_state=seed_i)
                 nn_temp.fit(X_scaled, y)
                 
                 # Predict
@@ -194,29 +200,31 @@ if uploaded_train and uploaded_input:
                 preds = nn_temp.predict(scaler.transform(df_temp[valid_features]))
                 
                 total = np.sum(preds)
-                diff = abs(total - target_value * 1_000_000) # Đổi triệu ra đơn vị thường
+                diff = abs(total - target_value * 1_000_000)
                 
-                # Nếu sai lệch dưới 5 triệu kWh thì lấy
-                if diff < 5_000_000:
+                # Điều kiện: Sai lệch dưới 3 triệu kWh là đạt
+                if diff < 3_000_000:
                     found_list.append((seed_i, total))
+                    # Nếu tìm được 5 số rồi thì dừng cho đỡ tốn thời gian
+                    if len(found_list) >= 5:
+                        break
+            
+            my_bar.progress(100)
             
             if found_list:
-                st.success("✅ ĐÃ TÌM THẤY CÁC SEED PHÙ HỢP:")
-                # Sắp xếp theo độ lệch nhỏ nhất
+                st.success("✅ ĐÃ TÌM THẤY! Hãy chọn một số Seed dưới đây và điền vào ô cấu hình:")
                 found_list.sort(key=lambda x: abs(x[1] - target_value*1000000))
-                
                 for s, t in found_list:
-                    st.write(f"👉 **Seed: {s}** | Tổng sản lượng: {t:,.0f} (Gần {target_value}tr)")
-                st.warning("Hãy nhập số Seed bạn thích vào ô 'Chọn Random Seed' ở cột bên trái, rồi tắt chế độ Dò tìm để chạy dự báo.")
+                    st.write(f"👉 **Seed: {s}** | Kết quả: {t:,.0f} (Lệch {abs(t - target_value*1_000_000)/1_000_000:.2f}tr)")
             else:
-                st.error("Không tìm thấy trong 100 số đầu. Hãy thử thay đổi 'Mục tiêu sản lượng' một chút.")
+                st.error("Không tìm thấy trong 1000 số đầu tiên. Bạn có thể thử đổi 'Mục tiêu' một chút.")
             
-            st.stop() # Dừng lại ở đây
+            st.stop() # Dừng lại để xem kết quả
 
-    # --- NÚT CHẠY DỰ BÁO CHÍNH THỨC ---
+    # --- PHẦN CHẠY CHÍNH (KHI KHÔNG DÒ TÌM) ---
     if st.button("🚀 THỰC HIỆN DỰ BÁO", type="primary"):
         try:
-            with st.spinner(f"Đang chạy mô hình với Seed = {selected_seed}..."):
+            with st.spinner(f"Đang chạy mô hình với Seed cố định = {selected_seed}..."):
                 # Gọi hàm mô phỏng với seed người dùng chọn
                 df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, "Final", user_seed=selected_seed)
                 
@@ -226,13 +234,13 @@ if uploaded_train and uploaded_input:
                 df_final.rename(columns={'Tổng thương phẩm': 'Thuc_te'}, inplace=True)
                 df_final['ThoiGian'] = pd.to_datetime(dict(year=df_final['Năm'], month=df_final['Tháng'], day=1))
 
-                # --- TÍNH TOÁN SAI SỐ (%) ---
+                # Tính sai số
                 mask = df_final['Thuc_te'].notnull()
                 df_final['Loi_NN(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['NN'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_RF(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['RF'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_XGB(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['XGB'])/df_final['Thuc_te']*100, np.nan)
 
-                # --- TAB 1: BẢNG TỔNG HỢP ---
+                # TAB 1: BẢNG TỔNG HỢP
                 st.subheader("📊 Bảng So Sánh Sai Số Các Phương Pháp")
                 
                 cols_display = {
@@ -245,7 +253,7 @@ if uploaded_train and uploaded_input:
                 
                 df_show = df_final[['Năm'] + list(cols_display.keys())].rename(columns=cols_display)
                 
-                # --- LOGIC TÔ MÀU (<= 1.5%) ---
+                # Tô màu
                 def highlight_accuracy(val):
                     if isinstance(val, float) and val <= 1.5:
                         return 'background-color: #ccffcc; color: green; font-weight: bold' 
@@ -259,7 +267,7 @@ if uploaded_train and uploaded_input:
                 }).applymap(highlight_accuracy, subset=['Sai số NN (%)', 'Sai số RF (%)', 'Sai số XGB (%)']), 
                 use_container_width=True)
 
-                # --- TAB 2: BIỂU ĐỒ ĐA ĐƯỜNG ---
+                # TAB 2: BIỂU ĐỒ
                 st.subheader("📈 Biểu Đồ So Sánh 3 Phương Pháp")
                 fig, ax = plt.subplots(figsize=(14, 7))
                 
@@ -276,6 +284,7 @@ if uploaded_train and uploaded_input:
                 ax.grid(True, linestyle=':', alpha=0.6)
                 st.pyplot(fig)
                 
+                # Nút tải về
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_show.to_excel(writer, index=False, sheet_name='Ket_qua')
