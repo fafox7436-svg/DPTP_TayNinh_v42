@@ -16,7 +16,7 @@ except ImportError:
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="So Sánh 3 Mô Hình", layout="wide")
-st.title("⚡ HỆ THỐNG DỰ BÁO)
+st.title("⚡ HỆ THỐNG DỰ BÁO")
 st.markdown("So sánh trực diện: **Neural Network** vs **Random Forest** vs **Holt-Winters**.")
 
 # ==============================================================================
@@ -239,3 +239,4 @@ if uploaded_train and uploaded_input:
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
             st.download_button("📥 Tải Báo Cáo Excel (Full)", buffer.getvalue(), "Ket_qua_so_sanh_3_pp.xlsx")
+
