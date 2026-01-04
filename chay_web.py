@@ -17,7 +17,7 @@ except ImportError:
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Hệ Thống Dự Báo Phụ Tải", layout="wide")
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN")
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH LONG AN")
 st.markdown("---")
 
 # ==============================================================================
@@ -48,7 +48,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     except Exception as e: return 0, f"❌ Lỗi xử lý: {str(e)}"
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (ĐÃ TINH CHỈNH NEURAL NETWORK)
+# 2. HÀM TÍNH TOÁN (TRẢ VỀ CẤU HÌNH CŨ 10-15-10)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -84,19 +84,14 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # --- 1. NEURAL NETWORK (CẤU HÌNH KÌM HÃM - CONSERVATIVE MODE) ---
-    # hidden_layer_sizes: Tăng độ sâu (3 lớp) để học được quy luật phức tạp của mùa nóng
-    # alpha=0.01: Mức phạt vừa phải. Đủ để kìm hãm sự phóng đại nhưng không làm mô hình bị "đơ".
-    # learning_rate_init=0.001: Tốc độ học chậm rãi, chắc chắn.
-    # max_iter=5000: Cho phép học lâu hơn để tìm ra điểm tối ưu.
+    # --- 1. NEURAL NETWORK (CẤU HÌNH CŨ - KHÔI PHỤC LẠI) ---
+    # Đã trả về (10, 15, 10) và solver='lbfgs' để ra số 749tr như cũ
     nn = MLPRegressor(
-        hidden_layer_sizes=(100, 50, 25),  # Cấu trúc hình tháp ngược (Rất tốt cho dữ liệu dạng này)
+        hidden_layer_sizes=(10, 15, 10), 
         activation='relu', 
-        solver='adam',      # Đổi sang 'adam' vì nó ổn định hơn 'lbfgs' cho dữ liệu nhiễu
-        alpha=0.01,         # Giảm mức phạt xuống 0.01 (Nới lỏng tay một chút)
-        learning_rate_init=0.001,
+        solver='lbfgs', 
         max_iter=5000, 
-        random_state=42
+        random_state=0
     )
     nn.fit(X_scaled, y)
     
@@ -159,7 +154,7 @@ if uploaded_train and uploaded_input:
             df_input_org = pd.read_excel(uploaded_input)
 
             with st.spinner("Đang chạy so sánh 3 mô hình..."):
-                # 1. Chạy Kịch bản Điều chỉnh (Đây là kết quả cuối cùng để so sánh)
+                # 1. Chạy Kịch bản Điều chỉnh
                 df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, "Final")
                 
                 # Ghép với Thực tế
@@ -187,7 +182,7 @@ if uploaded_train and uploaded_input:
                 
                 df_show = df_final[['Năm'] + list(cols_display.keys())].rename(columns=cols_display)
                 
-                # --- LOGIC TÔ MÀU THEO YÊU CẦU ---
+                # --- LOGIC TÔ MÀU (<= 1.5%) ---
                 def highlight_accuracy(val):
                     if isinstance(val, float) and val <= 1.5:
                         return 'background-color: #ccffcc; color: green; font-weight: bold' 
@@ -205,10 +200,13 @@ if uploaded_train and uploaded_input:
                 st.subheader("📈 Biểu Đồ So Sánh 3 Phương Pháp")
                 fig, ax = plt.subplots(figsize=(14, 7))
                 
+                # Neural Network
                 ax.plot(df_final['ThoiGian'], df_final['NN'], 's-', color='#d62728', label='Neural Network', linewidth=2, alpha=0.8)
+                # Random Forest
                 ax.plot(df_final['ThoiGian'], df_final['RF'], 'x--', color='#1f77b4', label='Random Forest', linewidth=1.5, alpha=0.7)
+                # XGBoost
                 ax.plot(df_final['ThoiGian'], df_final['XGB'], '^-.', color='#2ca02c', label='XGBoost', linewidth=2, alpha=0.9)
-
+                # Thực tế
                 if df_final['Thuc_te'].notnull().any():
                     ax.plot(df_final['ThoiGian'], df_final['Thuc_te'], 'o-', color='black', linewidth=3, label='Thực Tế', zorder=10)
 
@@ -218,6 +216,7 @@ if uploaded_train and uploaded_input:
                 ax.grid(True, linestyle=':', alpha=0.6)
                 st.pyplot(fig)
                 
+                # Nút tải về
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_show.to_excel(writer, index=False, sheet_name='Ket_qua')
@@ -225,4 +224,3 @@ if uploaded_train and uploaded_input:
 
         except Exception as e:
             st.error(f"❌ Lỗi: {e}")
-
