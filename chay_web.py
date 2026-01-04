@@ -21,8 +21,9 @@ except ImportError:
     HAS_GEMINI = False
 
 # --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="Hệ Thống Dự Báo", layout="wide")
+st.set_page_config(page_title="Dự Báo & So Sánh Tối Ưu", layout="wide")
 st.title("⚡ HỆ THỐNG DỰ BÁO PHỤ TẢI")
+st.markdown("Hệ thống tự động so sánh **Neural Network**, **Random Forest** và **SARIMA** để tìm ra phương pháp chính xác nhất cho từng tháng.")
 
 # ==============================================================================
 # 1. HÀM GEMINI
@@ -38,7 +39,7 @@ def ask_gemini_to_rate_event(api_key, news_content):
     except Exception as e: return 0, str(e)
 
 # ==============================================================================
-# 2. HÀM XỬ LÝ (LOGIC KHÔI PHỤC)
+# 2. HÀM XỬ LÝ SỐ LIỆU
 # ==============================================================================
 def them_yeu_to_mua(df):
     def check_tet(row):
@@ -59,35 +60,31 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     except: df_train = pd.read_excel(file_train, sheet_name=0)
     df_input = pd.read_excel(file_input)
 
-    # --- CƠ CHẾ ỔN ĐỊNH: CHỈ DÙNG CỘT SỰ KIỆN NẾU CÓ DỮ LIỆU ---
+    # --- CƠ CHẾ ỔN ĐỊNH SỰ KIỆN ---
     use_event = False
-    if manual_events_dict and len(manual_events_dict) > 0:
-        # Kiểm tra xem có sự kiện nào khác 0 không
-        if any(v != 0 for v in manual_events_dict.values()):
-            use_event = True
+    if manual_events_dict and any(v != 0 for v in manual_events_dict.values()):
+        use_event = True
+    
+    def get_event(row): 
+        return manual_events_dict.get((int(row['Năm']), int(row['Tháng'])), 0)
     
     if use_event:
-        def get_event(row): return manual_events_dict.get((int(row['Năm']), int(row['Tháng'])), 0)
         df_train['Su_Kien'] = df_train.apply(get_event, axis=1)
         df_input['Su_Kien'] = df_input.apply(get_event, axis=1)
     
-    # Xử lý mùa vụ
     df_train = them_yeu_to_mua(df_train)
     df_input = them_yeu_to_mua(df_input)
 
-    # --- FEATURES CHUẨN ---
-    # Nếu KHÔNG có sự kiện -> Dùng bộ feature CŨ (để ra số chuẩn 745tr)
-    # Nếu CÓ sự kiện -> Dùng bộ feature MỚI
+    # Features
     if use_event:
         features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 'Co_Tet', 'Mua_Nong', 'Mua_Mua', 'Su_Kien']
     else:
         features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 'Co_Tet', 'Mua_Nong', 'Mua_Mua']
 
-    # Lọc cột thực tế có trong file
     valid_features = [f for f in features if f in df_train.columns and f in df_input.columns]
     target = 'Tổng thương phẩm'
 
-    # Chuẩn bị dữ liệu
+    # Dữ liệu Train
     data_clean = df_train.dropna(subset=valid_features + [target]).copy()
     X = data_clean[valid_features]
     y = data_clean[target]
@@ -99,32 +96,35 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
     rf.fit(X, y)
 
-    # 2. Neural Network (Cấu hình VÀNG)
-    # Cấu hình này khớp với kết quả bạn ưng ý nhất
+    # 2. Neural Network (Chuẩn)
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
     nn.fit(X_scaled, y)
     
-    # 3. ARIMA (Fix lỗi số kỳ cục)
+    # 3. SARIMA (Nâng cấp để bắt mùa vụ tốt hơn ARIMA thường)
     arima_fit = None
     if HAS_ARIMA:
         try:
             ts_data = data_clean.copy()
-            # Sort dữ liệu theo thời gian (QUAN TRỌNG ĐỂ ARIMA KHÔNG BỊ LOẠN)
             ts_data['Date'] = pd.to_datetime(dict(year=ts_data['Năm'], month=ts_data['Tháng'], day=1))
-            ts_data = ts_data.sort_values('Date') 
+            ts_data = ts_data.sort_values('Date')
             ts_series = ts_data.set_index('Date')[target].asfreq('MS')
             
-            # Ép buộc tham số đơn giản nếu dữ liệu ít
-            order = (1, 1, 0) # Đơn giản hóa để tránh ra số kỳ cục
-            arima_model = ARIMA(ts_series, order=order)
-            arima_fit = arima_model.fit()
+            # Cấu hình SARIMA: (p,d,q) x (P,D,Q,s)
+            # order=(1,1,1): Tự hồi quy 1 tháng trước
+            # seasonal_order=(1,1,0,12): Tự hồi quy theo chu kỳ 12 tháng (Mùa vụ)
+            try:
+                arima_model = ARIMA(ts_series, order=(1, 1, 1), seasonal_order=(1, 1, 0, 12))
+                arima_fit = arima_model.fit()
+            except:
+                # Nếu lỗi (do dữ liệu quá ngắn), thử cấu hình đơn giản hơn
+                arima_model = ARIMA(ts_series, order=(5, 1, 0))
+                arima_fit = arima_model.fit()
         except: pass
 
     # DỰ BÁO
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     if len(df_pred) == 0: return None, "File Input rỗng."
 
-    # Fillna = 0 để tránh lỗi
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
 
     df_pred['RF_Forecast'] = rf.predict(df_pred[valid_features])
@@ -132,14 +132,13 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     
     if arima_fit:
         try:
-            # Dự báo nối tiếp từ điểm cuối của lịch sử
             steps = len(df_pred)
             arima_vals = arima_fit.forecast(steps=steps)
             df_pred['ARIMA_Forecast'] = arima_vals.values
-        except: df_pred['ARIMA_Forecast'] = 0 # Nếu lỗi thì về 0
+        except: df_pred['ARIMA_Forecast'] = 0
     else: df_pred['ARIMA_Forecast'] = 0
 
-    # Merge
+    # MERGE & TÍNH SAI SỐ TOÀN DIỆN
     df_actual = df_train[['Năm', 'Tháng', target]].copy()
     df_final = pd.merge(df_pred, df_actual, on=['Năm', 'Tháng'], how='left')
     df_final.rename(columns={target: 'Thuc_te'}, inplace=True)
@@ -152,61 +151,99 @@ def train_and_predict(file_train, file_input, manual_events_dict):
 # ==============================================================================
 with st.sidebar:
     st.header("Cấu hình")
-    api_key = st.text_input("Gemini API Key", type="password")
+    # Điền sẵn Key của bạn vào đây để đỡ phải nhập lại
+    # Ví dụ: value="AIzaSy..."
+    api_key = st.text_input("Gemini API Key", value="", type="password")
 
 col1, col2 = st.columns(2)
-with col1: uploaded_train = st.file_uploader("1. File Train (Lịch sử)", type=['xlsx', 'xls'])
-with col2: uploaded_input = st.file_uploader("2. File Input (Dự báo)", type=['xlsx', 'xls'])
+with col1: uploaded_train = st.file_uploader("1. File Lịch Sử (Train)", type=['xlsx', 'xls'])
+with col2: uploaded_input = st.file_uploader("2. File Dự Báo (Input)", type=['xlsx', 'xls'])
 
+# Phần Tin tức
 st.write("---")
 if 'event_list' not in st.session_state: st.session_state.event_list = {}
-
 c1, c2 = st.columns([2, 1])
-with c1: news = st.text_area("Dán tin tức (Nếu có):", height=80, placeholder="Thông tin ảnh hưởng đến nhu cầu phụ tải.")
+with c1: news = st.text_area("Dán tin tức (Gemini phân tích):", height=80)
 with c2:
-    if st.button("Phân tích tin tức"):
+    if st.button("Phân tích"):
         s, e = ask_gemini_to_rate_event(api_key, news)
         if e: st.error(e)
         else: 
-            # Demo gán cho tháng 4,5 năm 2025
             st.session_state.event_list[(2025, 4)] = s
             st.session_state.event_list[(2025, 5)] = s
-            st.success(f"Đánh giá tác động: {s}")
+            st.success(f"Đánh giá: {s}")
 
+# CHẠY DỰ BÁO
+st.write("---")
 if uploaded_train and uploaded_input:
-    if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
+    if st.button("🚀 CHẠY DỰ BÁO & SO SÁNH", type="primary"):
         df_result, err = train_and_predict(uploaded_train, uploaded_input, st.session_state.event_list)
         
         if err: st.error(err)
         else:
-            # Bảng
-            st.subheader("📊 Kết Quả")
-            df_result['Lệch NN (%)'] = np.where(df_result['Thuc_te'].notnull(), 
-                                                 abs(df_result['Thuc_te'] - df_result['NN_Forecast'])/df_result['Thuc_te']*100, np.nan)
-            
-            cols = ['Năm', 'Tháng', 'Thuc_te', 'NN_Forecast', 'RF_Forecast', 'ARIMA_Forecast', 'Lệch NN (%)']
-            st.dataframe(df_result[cols].style.format("{:,.0f}"), use_container_width=True)
-
-            # Biểu đồ
-            st.subheader("📈 Biểu Đồ")
-            fig, ax = plt.subplots(figsize=(12, 6))
-            ax.plot(df_result['Date'], df_result['NN_Forecast'], 's-', color='red', label='Neural Network', linewidth=2)
-            ax.plot(df_result['Date'], df_result['RF_Forecast'], 'x--', color='blue', label='Random Forest', alpha=0.5)
-            
-            # Chỉ vẽ ARIMA nếu nó ra số hợp lý (> 1 triệu kWh)
-            if df_result['ARIMA_Forecast'].max() > 1000000:
-                ax.plot(df_result['Date'], df_result['ARIMA_Forecast'], '^-.', color='green', label='ARIMA', alpha=0.6)
-            
+            # --- TÍNH TOÁN SAI SỐ CHI TIẾT ---
+            # Chỉ tính với các dòng có số liệu thực tế
             mask = df_result['Thuc_te'].notnull()
-            if mask.any(): ax.plot(df_result.loc[mask, 'Date'], df_result.loc[mask, 'Thuc_te'], 'o-', color='black')
             
+            # Tính % Lệch cho từng phương pháp
+            df_result['Lệch NN (%)'] = np.where(mask, abs(df_result['Thuc_te'] - df_result['NN_Forecast'])/df_result['Thuc_te']*100, np.nan)
+            df_result['Lệch RF (%)'] = np.where(mask, abs(df_result['Thuc_te'] - df_result['RF_Forecast'])/df_result['Thuc_te']*100, np.nan)
+            df_result['Lệch ARIMA (%)'] = np.where(mask, abs(df_result['Thuc_te'] - df_result['ARIMA_Forecast'])/df_result['Thuc_te']*100, np.nan)
+
+            # --- TÌM PHƯƠNG PHÁP TỐT NHẤT ---
+            def tim_best(row):
+                if pd.isna(row['Thuc_te']): return ""
+                errors = {
+                    'Neural Net': row['Lệch NN (%)'],
+                    'Random Forest': row['Lệch RF (%)'],
+                    'ARIMA': row['Lệch ARIMA (%)'] if row['ARIMA_Forecast'] > 0 else 999
+                }
+                # Lấy tên phương pháp có sai số nhỏ nhất
+                return min(errors, key=errors.get)
+
+            df_result['Tốt nhất'] = df_result.apply(tim_best, axis=1)
+
+            # --- HIỂN THỊ BẢNG ---
+            st.subheader("📊 Bảng So Sánh Sai Số Chi Tiết")
+            
+            cols_show = ['Tháng', 'Thuc_te', 
+                         'NN_Forecast', 'Lệch NN (%)', 
+                         'RF_Forecast', 'Lệch RF (%)', 
+                         'ARIMA_Forecast', 'Lệch ARIMA (%)', 
+                         'Tốt nhất']
+            
+            # Format bảng
+            st.dataframe(df_result[cols_show].style.format({
+                'Thuc_te': '{:,.0f}', 
+                'NN_Forecast': '{:,.0f}', 'Lệch NN (%)': '{:.2f}%',
+                'RF_Forecast': '{:,.0f}', 'Lệch RF (%)': '{:.2f}%',
+                'ARIMA_Forecast': '{:,.0f}', 'Lệch ARIMA (%)': '{:.2f}%'
+            }).applymap(lambda x: 'background-color: #d4edda; color: green; font-weight: bold' if isinstance(x, str) and len(x)>0 else '', subset=['Tốt nhất']), 
+            use_container_width=True)
+
+            # --- BIỂU ĐỒ ---
+            st.subheader("📈 Biểu Đồ So Sánh")
+            fig, ax = plt.subplots(figsize=(14, 7))
+            
+            # Vẽ đường thực tế
+            if mask.any():
+                ax.plot(df_result.loc[mask, 'Date'], df_result.loc[mask, 'Thuc_te'], 'o-', color='black', linewidth=3, label='Thực Tế')
+            
+            # Vẽ 3 đường dự báo
+            ax.plot(df_result['Date'], df_result['NN_Forecast'], 's-', color='red', label='Neural Network', alpha=0.8)
+            ax.plot(df_result['Date'], df_result['RF_Forecast'], 'x--', color='blue', label='Random Forest', alpha=0.6)
+            
+            # Vẽ ARIMA nếu số liệu hợp lý
+            if df_result['ARIMA_Forecast'].max() > 1000:
+                ax.plot(df_result['Date'], df_result['ARIMA_Forecast'], '^-.', color='green', label='ARIMA (Seasonal)', alpha=0.7)
+            
+            ax.set_title("So Sánh Các Mô Hình Dự Báo")
             ax.legend()
-            ax.grid(True)
+            ax.grid(True, linestyle='--', alpha=0.5)
             st.pyplot(fig)
             
             # Tải về
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
-            st.download_button("Tải Excel", buffer.getvalue(), "Ket_qua.xlsx")
-
+            st.download_button("📥 Tải Báo Cáo Chi Tiết", buffer.getvalue(), "Ket_qua_so_sanh.xlsx")
