@@ -8,6 +8,7 @@ from sklearn.preprocessing import StandardScaler
 import xgboost as xgb
 import io
 
+# Kiểm tra thư viện Gemini
 try:
     import google.generativeai as genai
     HAS_GEMINI = True
@@ -20,13 +21,13 @@ st.title("⚡ HỆ THỐNG DỰ BÁO")
 st.markdown("So sánh hiệu suất: **Neural Network** vs **Random Forest** vs **XGBoost**.")
 
 # ==============================================================================
-# 1. HÀM GEMINI (ĐÃ SỬA LỖI MODEL SANG GEMINI-PRO)
+# 1. HÀM GEMINI (SỬ DỤNG MODEL CHUẨN GEMINI-PRO)
 # ==============================================================================
 def ask_gemini_to_rate_event(api_key, news_content):
     if not api_key: return None, "Chưa nhập API Key."
     try:
         genai.configure(api_key=api_key)
-        # SỬA LỖI QUAN TRỌNG: Dùng 'gemini-pro' thay vì 'gemini-1.5-flash'
+        # Sử dụng model ổn định nhất hiện nay
         model = genai.GenerativeModel('gemini-pro')
         
         prompt = f"Đánh giá tác động tin tức đến phụ tải điện (-2 đến 2). Tin: '{news_content}'. Trả về 1 số nguyên."
@@ -56,7 +57,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     except: df_train = pd.read_excel(file_train, sheet_name=0)
     df_input = pd.read_excel(file_input)
 
-    # Sự kiện
+    # Xử lý sự kiện từ Gemini
     use_event = False
     if manual_events_dict and any(v != 0 for v in manual_events_dict.values()):
         use_event = True
@@ -69,7 +70,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     df_train = them_yeu_to_mua(df_train)
     df_input = them_yeu_to_mua(df_input)
 
-    # Features
+    # Chọn Features
     if use_event:
         features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 'Co_Tet', 'Mua_Nong', 'Mua_Mua', 'Su_Kien']
     else:
@@ -78,7 +79,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     valid_features = [f for f in features if f in df_train.columns and f in df_input.columns]
     target = 'Tổng thương phẩm'
 
-    # Data Clean
+    # Làm sạch dữ liệu train
     data_clean = df_train.dropna(subset=valid_features + [target]).copy()
     X = data_clean[valid_features]
     y = data_clean[target]
@@ -94,11 +95,11 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
     nn.fit(X_scaled, y)
     
-    # --- MODEL 3: XGBOOST (Cấu hình chống Overfitting - Sai số thật) ---
+    # --- MODEL 3: XGBOOST (Cấu hình chuẩn sai số thật) ---
     xgb_model = xgb.XGBRegressor(
-        n_estimators=50,       # Giảm số cây để tránh học vẹt
-        learning_rate=0.1,     # Tăng tốc độ học
-        max_depth=2,           # Cây nông (chỉ học ý chính)
+        n_estimators=50,       # Số cây ít để tránh học vẹt
+        learning_rate=0.1,     # Tốc độ học vừa phải
+        max_depth=2,           # Cây nông (chỉ học quy luật chính)
         subsample=0.7,         # Che bớt dữ liệu khi học
         random_state=42,
         n_jobs=-1
@@ -111,12 +112,12 @@ def train_and_predict(file_train, file_input, manual_events_dict):
 
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
 
-    # Predict
+    # Chạy dự báo
     df_pred['RF_Forecast'] = rf.predict(df_pred[valid_features])
     df_pred['NN_Forecast'] = nn.predict(scaler.transform(df_pred[valid_features]))
     df_pred['XGB_Forecast'] = xgb_model.predict(df_pred[valid_features])
 
-    # Merge
+    # Gộp kết quả
     df_actual = df_train[['Năm', 'Tháng', target]].copy()
     df_final = pd.merge(df_pred, df_actual, on=['Năm', 'Tháng'], how='left')
     df_final.rename(columns={target: 'Thuc_te'}, inplace=True)
@@ -125,7 +126,7 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     return df_final, None
 
 # ==============================================================================
-# GIAO DIỆN
+# GIAO DIỆN CHÍNH
 # ==============================================================================
 with st.sidebar:
     st.header("Cấu hình")
@@ -136,7 +137,7 @@ with col1: uploaded_train = st.file_uploader("1. File Lịch Sử (Train)", type
 with col2: uploaded_input = st.file_uploader("2. File Dự Báo (Input)", type=['xlsx', 'xls'])
 
 st.write("---")
-# Tin tức Gemini
+# Phần Tin tức Gemini
 if 'event_list' not in st.session_state: st.session_state.event_list = {}
 c1, c2 = st.columns([2, 1])
 with c1: news = st.text_area("Nhập nội dung tin tức:", height=80)
@@ -149,7 +150,7 @@ with c2:
             st.session_state.event_list[(2025, 5)] = s
             st.success(f"Kết quả: {s}")
 
-# Nút chạy
+# Nút Chạy Dự Báo
 st.write("---")
 if uploaded_train and uploaded_input:
     if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
