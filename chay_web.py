@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
-import xgboost as xgb  # <--- THƯ VIỆN MỚI
+import xgboost as xgb
 import io
 
 try:
@@ -15,9 +15,9 @@ except ImportError:
     HAS_GEMINI = False
 
 # --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="So Sánh 3 Mô Hình (XGBoost)", layout="wide")
-st.title("⚡ HỆ THỐNG DỰ BÁO")
-st.markdown("So sánh hiệu suất: **Neural Network (MLP)** vs **Random Forest (RF)** vs **XGBoost (Gradient Boosting)**.")
+st.set_page_config(page_title="So Sánh 3 Mô Hình (Final)", layout="wide")
+st.title("⚡ HỆ THỐNG DỰ BÁO: CUỘC ĐUA CÔNG NGHỆ")
+st.markdown("So sánh hiệu suất: **Neural Network** vs **Random Forest** vs **XGBoost**.")
 
 # ==============================================================================
 # 1. HÀM GEMINI
@@ -92,16 +92,13 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
     nn.fit(X_scaled, y)
     
-    # --- MODEL 3: XGBOOST (THAY THẾ HOLT-WINTERS/ARIMA) ---
-    # Cấu hình XGBoost tối ưu cho dữ liệu nhỏ/vừa:
-    # - n_estimators=1000: Số lượng cây học (nhiều để sửa lỗi kỹ)
-    # - learning_rate=0.05: Học chậm thôi để tránh bị vọt số (quan trọng!)
-    # - max_depth=3: Cây thấp thôi để tránh học vẹt (overfitting)
-xgb_model = xgb.XGBRegressor(
-        n_estimators=50,       # Giảm từ 1000 xuống 50 (Học ít thôi)
-        learning_rate=0.1,     # Tăng tốc độ học lên chút
-        max_depth=2,           # Cây cực nông (Chỉ được hỏi 2 câu yes/no) -> Tránh học chi tiết thừa
-        subsample=0.7,         # Chỉ dùng 70% dữ liệu để học mỗi lần -> Tạo độ nhiễu để tránh học vẹt
+    # --- MODEL 3: XGBOOST (Cấu hình chống Overfitting) ---
+    # Đã chỉnh thụt lề chuẩn xác
+    xgb_model = xgb.XGBRegressor(
+        n_estimators=50,       # Giảm số cây để tránh học vẹt
+        learning_rate=0.1,     # Tăng tốc độ học
+        max_depth=2,           # Cây nông (chỉ học ý chính)
+        subsample=0.7,         # Che bớt dữ liệu khi học
         random_state=42,
         n_jobs=-1
     )
@@ -116,7 +113,7 @@ xgb_model = xgb.XGBRegressor(
     # Predict
     df_pred['RF_Forecast'] = rf.predict(df_pred[valid_features])
     df_pred['NN_Forecast'] = nn.predict(scaler.transform(df_pred[valid_features]))
-    df_pred['XGB_Forecast'] = xgb_model.predict(df_pred[valid_features]) # XGBoost dự báo
+    df_pred['XGB_Forecast'] = xgb_model.predict(df_pred[valid_features])
 
     # Merge
     df_actual = df_train[['Năm', 'Tháng', target]].copy()
@@ -154,7 +151,7 @@ with c2:
 # Nút chạy
 st.write("---")
 if uploaded_train and uploaded_input:
-    if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
+    if st.button("🚀 CHẠY SO SÁNH", type="primary"):
         df_result, err = train_and_predict(uploaded_train, uploaded_input, st.session_state.event_list)
         
         if err: st.error(err)
@@ -221,5 +218,3 @@ if uploaded_train and uploaded_input:
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
             st.download_button("📥 Tải Báo Cáo Excel", buffer.getvalue(), "Ket_qua_XGBoost.xlsx")
-
-
