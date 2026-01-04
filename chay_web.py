@@ -100,51 +100,68 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
     nn.fit(X_scaled, y)
     
-# 3. SARIMA (PHIÊN BẢN MÔ PHỎNG EVIEWS - ÉP SAI PHÂN)
+# 3. SARIMA (PHIÊN BẢN AUTO-TUNING + ÉP KIỂU EVIEWS)
     arima_fit = None
     if HAS_ARIMA:
         try:
             ts_data = data_clean.copy()
-            # 1. Tạo index chuẩn
+            # 1. Chuẩn hóa thời gian
             ts_data['Date'] = pd.to_datetime(dict(year=ts_data['Năm'], month=ts_data['Tháng'], day=1))
             ts_data = ts_data.sort_values('Date')
             ts_series = ts_data.set_index('Date')[target].asfreq('MS')
-
-            # 2. XỬ LÝ LOGARIT (Giống EViews: log(series))
+            
+            # 2. Logarit hóa (Giống EViews để ổn định dao động)
             ts_log = np.log(ts_series)
 
-            # 3. CẤU HÌNH SARIMA CHẶT CHẼ
-            # order=(p, d, q)
-            # - d=1: Lấy sai phân lần 1 (Triệt tiêu xu hướng tuyến tính)
-            # - p=1: Tự hồi quy bậc 1 (AR1) - Dùng quá khứ gần nhất để chỉnh
-            # - q=1: Trung bình trượt bậc 1 (MA1) - Chỉnh sai số
-            # seasonal_order=(P, D, Q, s)
-            # - D=1: Lấy sai phân mùa vụ (So sánh tháng này với tháng này năm ngoái)
-            # - s=12: Chu kỳ 12 tháng
+            # 3. AUTO-SEARCH (Mô phỏng EViews tìm tham số tốt nhất)
+            # Danh sách các bộ tham số "vàng" cho dữ liệu điện lực
+            # Cấu trúc: (p,d,q) x (P,D,Q,s)
+            param_grid = [
+                ((1, 1, 1), (0, 1, 1, 12)),  # Cấu hình 1: Tiêu chuẩn (Thường EViews chọn cái này)
+                ((1, 1, 0), (0, 1, 0, 12)),  # Cấu hình 2: Đơn giản hơn
+                ((0, 1, 1), (0, 1, 1, 12)),  # Cấu hình 3: Thiên về trung bình trượt
+                ((2, 1, 0), (1, 1, 0, 12))   # Cấu hình 4: Phức tạp (nếu dữ liệu đủ tốt)
+            ]
             
-            # Mẹo của EViews: Nếu dữ liệu ngắn, đừng ham P, Q lớn. Giữ P=0, Q=1 hoặc P=1, Q=0
-            try:
-                # Cấu hình này thường cho kết quả rất sát thực tế (MAPE < 5%)
-                arima_model = ARIMA(ts_log, order=(1, 1, 1), seasonal_order=(0, 1, 1, 12))
-                arima_fit = arima_model.fit()
-            except:
-                # Nếu không chạy được Seasonal (do dữ liệu < 24 tháng), dùng cấu hình ARIMA(1,1,0) cổ điển
-                # Đây là cấu hình "bảo hiểm" an toàn nhất
-                arima_model = ARIMA(ts_log, order=(1, 1, 0))
-                arima_fit = arima_model.fit()
+            best_aic = float("inf")
+            best_model = None
+
+            for order, seasonal_order in param_grid:
+                try:
+                    # enforce_stationarity=False: ĐÂY LÀ CHÌA KHÓA!
+                    # Nó cho phép mô hình chạy giống EViews kể cả khi dữ liệu chưa dừng hẳn.
+                    mod = ARIMA(ts_log, order=order, seasonal_order=seasonal_order, 
+                                enforce_stationarity=False, 
+                                enforce_invertibility=False)
+                    res = mod.fit()
+                    
+                    # So sánh AIC (Chỉ số đo độ tốt, càng thấp càng tốt)
+                    if res.aic < best_aic:
+                        best_aic = res.aic
+                        best_model = res
+                except:
+                    continue
+            
+            # Chọn được mô hình tốt nhất thì gán vào biến chính
+            if best_model is not None:
+                arima_fit = best_model
+            else:
+                # Fallback cuối cùng nếu Auto thất bại: ARIMA(1,1,0) cơ bản
+                arima_fit = ARIMA(ts_log, order=(1, 1, 0)).fit()
+
         except: pass
 
     # --- DỰ BÁO ---
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     if len(df_pred) == 0: return None, "File Input rỗng."
-    
+
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
     # Predict RF & NN
     df_pred['RF_Forecast'] = rf.predict(df_pred[valid_features])
     df_pred['NN_Forecast'] = nn.predict(scaler.transform(df_pred[valid_features]))
 
-    # Predict ARIMA & Bung nén Log (Exp)
+    # Predict ARIMA (Bung nén Logarit)
     if arima_fit:
         try:
             steps = len(df_pred)
@@ -262,5 +279,6 @@ if uploaded_train and uploaded_input:
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
             st.download_button("📥 Tải Báo Cáo Chi Tiết", buffer.getvalue(), "Ket_qua_so_sanh.xlsx")
+
 
 
