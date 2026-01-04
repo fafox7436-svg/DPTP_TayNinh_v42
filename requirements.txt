@@ -6,3 +6,4 @@ scikit-learn
 openpyxl
 xlsxwriter
 statsmodels
+google-generativeai
