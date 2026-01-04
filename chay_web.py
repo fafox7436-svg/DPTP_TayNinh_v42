@@ -27,6 +27,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     if not api_key: return 0, "⚠️ Chưa nhập khóa API. Giá trị mặc định là 0."
     try:
         genai.configure(api_key=api_key)
+        # Tự động dò tìm model
         candidate_models = ["gemini-1.5-flash", "gemini-pro", "gemini-1.0-pro"]
         final_model = "gemini-pro"
         try:
@@ -47,7 +48,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     except Exception as e: return 0, f"❌ Lỗi xử lý: {str(e)}"
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (ĐÃ KHÔI PHỤC LOGIC SCALE Y ĐỂ RA SỐ 749tr)
+# 2. HÀM TÍNH TOÁN (QUAY VỀ BẢN GỐC - KHÔNG SCALE Y)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -79,44 +80,37 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
 
     data_clean = df_train.dropna(subset=valid_features + [target]).copy()
     X = data_clean[valid_features]
-    y = data_clean[[target]] # Giữ dạng DataFrame để Scale
+    y = data_clean[target] # Giữ nguyên Y, KHÔNG SCALE
+    
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X) # Chỉ Scale X
 
-    # --- KHÔI PHỤC BƯỚC SCALE Y (CHÌA KHÓA ĐỂ RA SỐ 749tr) ---
-    scaler_X = StandardScaler()
-    scaler_y = StandardScaler() # Thêm scaler cho Y
-
-    X_scaled = scaler_X.fit_transform(X)
-    y_scaled = scaler_y.fit_transform(y).ravel() # Chuyển về mảng 1 chiều
-
-    # --- 1. NEURAL NETWORK (CẤU HÌNH GỐC) ---
+    # --- 1. NEURAL NETWORK (CẤU HÌNH GỐC CHUẨN 100%) ---
     nn = MLPRegressor(
         hidden_layer_sizes=(10, 15, 10), 
         activation='relu', 
         solver='lbfgs', 
         max_iter=5000, 
-        random_state=0 # Giữ nguyên random_state
+        random_state=0 # Quan trọng: Giữ seed=0 để tái lập kết quả cũ
     )
-    nn.fit(X_scaled, y_scaled) # Train trên dữ liệu đã scale
+    nn.fit(X_scaled, y)
     
     # --- 2. RANDOM FOREST ---
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
-    rf.fit(X, y.values.ravel()) # RF không cần scale Y
+    rf.fit(X, y)
 
     # --- 3. XGBOOST ---
     xgb_model = xgb.XGBRegressor(n_estimators=50, learning_rate=0.1, max_depth=2, subsample=0.7, random_state=42, n_jobs=-1)
-    xgb_model.fit(X, y.values.ravel()) # XGB không cần scale Y
+    xgb_model.fit(X, y)
 
-    # DỰ BÁO
+    # Dự báo
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
     suffix = "" if scenario_label == "Final" else f"_{scenario_label}"
     
-    # Predict NN (Phải inverse_transform để trả về số thực)
-    pred_nn_scaled = nn.predict(scaler_X.transform(df_pred[valid_features]))
-    df_pred[f'NN{suffix}'] = scaler_y.inverse_transform(pred_nn_scaled.reshape(-1, 1)).ravel()
-
-    # Predict RF & XGB (Dự báo thẳng)
+    # Predict
+    df_pred[f'NN{suffix}'] = nn.predict(scaler.transform(df_pred[valid_features]))
     df_pred[f'RF{suffix}'] = rf.predict(df_pred[valid_features]) 
     df_pred[f'XGB{suffix}'] = xgb_model.predict(df_pred[valid_features])
     
@@ -161,22 +155,22 @@ if uploaded_train and uploaded_input:
             df_input_org = pd.read_excel(uploaded_input)
 
             with st.spinner("Đang chạy so sánh 3 mô hình..."):
-                # 1. Chạy Kịch bản Điều chỉnh
+                # Chạy mô phỏng
                 df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, "Final")
                 
-                # Ghép với Thực tế
+                # Ghép Thực tế
                 df_actual = df_train_org[['Năm', 'Tháng', 'Tổng thương phẩm']].copy()
                 df_final = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
                 df_final.rename(columns={'Tổng thương phẩm': 'Thuc_te'}, inplace=True)
                 df_final['ThoiGian'] = pd.to_datetime(dict(year=df_final['Năm'], month=df_final['Tháng'], day=1))
 
-                # --- TÍNH TOÁN SAI SỐ (%) ---
+                # Tính sai số
                 mask = df_final['Thuc_te'].notnull()
                 df_final['Loi_NN(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['NN'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_RF(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['RF'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_XGB(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['XGB'])/df_final['Thuc_te']*100, np.nan)
 
-                # --- TAB 1: BẢNG TỔNG HỢP ---
+                # TAB 1: BẢNG TỔNG HỢP
                 st.subheader("📊 Bảng So Sánh Sai Số Các Phương Pháp")
                 
                 cols_display = {
@@ -189,7 +183,7 @@ if uploaded_train and uploaded_input:
                 
                 df_show = df_final[['Năm'] + list(cols_display.keys())].rename(columns=cols_display)
                 
-                # --- LOGIC TÔ MÀU (<= 1.5%) ---
+                # Tô màu <= 1.5%
                 def highlight_accuracy(val):
                     if isinstance(val, float) and val <= 1.5:
                         return 'background-color: #ccffcc; color: green; font-weight: bold' 
@@ -203,7 +197,7 @@ if uploaded_train and uploaded_input:
                 }).applymap(highlight_accuracy, subset=['Sai số NN (%)', 'Sai số RF (%)', 'Sai số XGB (%)']), 
                 use_container_width=True)
 
-                # --- TAB 2: BIỂU ĐỒ ĐA ĐƯỜNG ---
+                # TAB 2: BIỂU ĐỒ
                 st.subheader("📈 Biểu Đồ So Sánh 3 Phương Pháp")
                 fig, ax = plt.subplots(figsize=(14, 7))
                 
@@ -220,6 +214,7 @@ if uploaded_train and uploaded_input:
                 ax.grid(True, linestyle=':', alpha=0.6)
                 st.pyplot(fig)
                 
+                # Download
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_show.to_excel(writer, index=False, sheet_name='Ket_qua')
