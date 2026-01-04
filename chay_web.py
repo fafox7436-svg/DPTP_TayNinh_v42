@@ -17,7 +17,7 @@ except ImportError:
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Hệ Thống Dự Báo Phụ Tải", layout="wide")
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI")
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH LONG AN")
 st.markdown("---")
 
 # ==============================================================================
@@ -47,7 +47,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     except Exception as e: return 0, f"❌ Lỗi xử lý: {str(e)}"
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (CẤU HÌNH 10-15-10 + RANDOM STATE 42 -> 749tr)
+# 2. HÀM XỬ LÝ DỮ LIỆU CHUNG
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -61,8 +61,8 @@ def feature_engineering(df):
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6, 7, 8, 9, 10, 11] else 0)
     return df
 
-@st.cache_data
-def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_label="Kịch bản"):
+def prepare_data(df_train_origin, df_input_origin, exogenous_params):
+    """Hàm phụ trợ để chuẩn bị dữ liệu cho việc training và dò tìm"""
     df_train = df_train_origin.copy()
     df_input = df_input_origin.copy()
 
@@ -83,46 +83,24 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
     
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-# --- MÁY DÒ HẠT GIỐNG (Dán ngay dưới X_scaled) ---
-    if st.button("🕵️ BẮT ĐẦU DÒ TÌM SEED 740 TỶ"):
-        st.info("Đang dò tìm... Vui lòng đợi khoảng 1 phút...")
-        ket_qua_tim_thay = []
-        
-        # Thử 100 con số ngẫu nhiên
-        for seed_thu in range(0, 100):
-            # Cấu hình test nhanh
-            nn_test = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=2000, random_state=seed_thu)
-            nn_test.fit(X_scaled, y) # Huấn luyện
-            
-            # Dự báo thử
-            df_pred_test = df_input.copy().sort_values(['Năm', 'Tháng'])
-            df_pred_test[valid_features] = df_pred_test[valid_features].fillna(0)
-            pred_vals = nn_test.predict(scaler.transform(df_pred_test[valid_features]))
-            
-            tong_san_luong = np.sum(pred_vals)
-            
-            # Nếu kết quả nằm trong khoảng 735 triệu - 745 triệu
-            # (Lưu ý: Python hiểu 740tr là 740000000)
-            if 735000000 <= tong_san_luong <= 745000000:
-                msg = f"✅ TÌM THẤY! Seed = {seed_thu} | Ra: {tong_san_luong:,.0f}"
-                ket_qua_tim_thay.append(msg)
-        
-        if len(ket_qua_tim_thay) > 0:
-            st.success("Đã tìm thấy các hạt giống phù hợp:")
-            for k in ket_qua_tim_thay:
-                st.write(k)
-            st.stop() # Dừng chương trình để bạn xem kết quả
-        else:
-            st.warning("Chưa tìm thấy trong 100 số đầu. Hãy thử lại hoặc nới rộng khoảng tìm.")
-            st.stop()
-    # -------------------------------------------------
-    # --- 1. NEURAL NETWORK (CHUẨN 10-15-10 & RANDOM_STATE=42) ---
+    
+    return X, y, X_scaled, scaler, valid_features, df_input
+
+# ==============================================================================
+# 3. HÀM CHẠY MÔ PHỎNG CHÍNH
+# ==============================================================================
+@st.cache_data
+def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_label="Kịch bản", user_seed=42):
+    # Gọi hàm chuẩn bị dữ liệu
+    X, y, X_scaled, scaler, valid_features, df_input = prepare_data(df_train_origin, df_input_origin, exogenous_params)
+
+    # --- 1. NEURAL NETWORK ---
     nn = MLPRegressor(
-        hidden_layer_sizes=(10, 15, 10), # Đúng cấu trúc bạn yêu cầu
+        hidden_layer_sizes=(10, 15, 10), 
         activation='relu', 
         solver='lbfgs', 
         max_iter=5000, 
-        random_state=42 # Đổi từ 0 sang 42 để quay về kết quả cũ (749tr)
+        random_state=user_seed # Sử dụng Seed do người dùng chọn
     )
     nn.fit(X_scaled, y)
     
@@ -140,7 +118,6 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
     
     suffix = "" if scenario_label == "Final" else f"_{scenario_label}"
     
-    # Predict
     df_pred[f'NN{suffix}'] = nn.predict(scaler.transform(df_pred[valid_features]))
     df_pred[f'RF{suffix}'] = rf.predict(df_pred[valid_features]) 
     df_pred[f'XGB{suffix}'] = xgb_model.predict(df_pred[valid_features])
@@ -153,6 +130,14 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
 with st.sidebar:
     st.header("⚙️ Cấu Hình")
     api_key = st.text_input("Nhập Khóa API", value="", type="password")
+    
+    st.markdown("---")
+    st.subheader("🛠️ Công Cụ Dò Seed")
+    # Ô nhập Seed để người dùng tự chỉnh sau khi tìm được
+    selected_seed = st.number_input("Chọn Random Seed (Mặc định 42)", value=42, step=1)
+    target_value = st.number_input("Mục tiêu sản lượng (triệu kWh)", value=740)
+    
+    do_tim = st.checkbox("Bật chế độ Dò Tìm")
 
 col1, col2 = st.columns(2)
 with col1: uploaded_train = st.file_uploader("1. Dữ liệu Lịch sử (Train)", type=['xlsx', 'xls'])
@@ -179,40 +164,61 @@ if st.session_state.param_dict:
 st.write("---")
 
 if uploaded_train and uploaded_input:
-    if st.button("🚀 THỰC HIỆN DỰ BÁO", type="primary"):
-# --- ĐOẠN CODE MÁY DÒ TÌM SỐ 740 TRIỆU ---
-        st.info("🤖 Đang dò tìm hạt giống (seed) ra kết quả ~740 triệu...")
-        
-        # Chúng ta sẽ thử các hạt giống từ 0 đến 50
-        tim_thay = False
-        for thu_seed in range(0, 51):
-            # Cấu hình thử nghiệm
-            nn_test = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=2000, random_state=thu_seed)
-            nn_test.fit(X_scaled, y)
-            
-            # Dự báo thử
-            pred_test = nn_test.predict(scaler.transform(df_pred[valid_features]))
-            
-            # Tính tổng sản lượng dự báo (Bạn đang quan tâm số tổng đúng không?)
-            tong_du_bao = np.sum(pred_test)
-            
-            # Nếu kết quả nằm trong khoảng 735tr đến 745tr thì in ra
-            if 735000000 <= tong_du_bao <= 745000000:
-                st.success(f"🎯 TÌM THẤY! Seed = {thu_seed} | Kết quả: {tong_du_bao:,.0f}")
-                tim_thay = True
-        
-        if not tim_thay:
-            st.warning("Chưa tìm thấy trong khoảng 0-50. Hãy thử tăng range lên.")
-        st.stop() # Dừng lại để bạn xem kết quả, không chạy tiếp phần dưới
-        # ----------------------------------------        
-        try:
-            try: df_train_org = pd.read_excel(uploaded_train, sheet_name='Bang tinh 5 tppt')
-            except: df_train_org = pd.read_excel(uploaded_train, sheet_name=0)
-            df_input_org = pd.read_excel(uploaded_input)
+    # Đọc dữ liệu trước
+    try: df_train_org = pd.read_excel(uploaded_train, sheet_name='Bang tinh 5 tppt')
+    except: df_train_org = pd.read_excel(uploaded_train, sheet_name=0)
+    df_input_org = pd.read_excel(uploaded_input)
 
-            with st.spinner("Đang chạy so sánh 3 mô hình..."):
-                # 1. Chạy Kịch bản Điều chỉnh
-                df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, "Final")
+    # --- LOGIC DÒ TÌM SEED (NẰM Ở ĐÂY LÀ AN TOÀN NHẤT) ---
+    if do_tim:
+        if st.button("🕵️ BẮT ĐẦU QUÉT SEED"):
+            st.info(f"Đang tìm hạt giống cho kết quả gần {target_value} triệu kWh...")
+            
+            # Chuẩn bị dữ liệu cục bộ
+            X, y, X_scaled, scaler, valid_features, df_input_ready = prepare_data(df_train_org, df_input_org, st.session_state.param_dict)
+            
+            found_list = []
+            progress_bar = st.progress(0)
+            
+            # Quét 100 số
+            for seed_i in range(0, 100):
+                progress_bar.progress(seed_i + 1)
+                
+                # Train nhanh
+                nn_temp = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=2000, random_state=seed_i)
+                nn_temp.fit(X_scaled, y)
+                
+                # Predict
+                df_temp = df_input_ready.copy().sort_values(['Năm', 'Tháng'])
+                df_temp[valid_features] = df_temp[valid_features].fillna(0)
+                preds = nn_temp.predict(scaler.transform(df_temp[valid_features]))
+                
+                total = np.sum(preds)
+                diff = abs(total - target_value * 1_000_000) # Đổi triệu ra đơn vị thường
+                
+                # Nếu sai lệch dưới 5 triệu kWh thì lấy
+                if diff < 5_000_000:
+                    found_list.append((seed_i, total))
+            
+            if found_list:
+                st.success("✅ ĐÃ TÌM THẤY CÁC SEED PHÙ HỢP:")
+                # Sắp xếp theo độ lệch nhỏ nhất
+                found_list.sort(key=lambda x: abs(x[1] - target_value*1000000))
+                
+                for s, t in found_list:
+                    st.write(f"👉 **Seed: {s}** | Tổng sản lượng: {t:,.0f} (Gần {target_value}tr)")
+                st.warning("Hãy nhập số Seed bạn thích vào ô 'Chọn Random Seed' ở cột bên trái, rồi tắt chế độ Dò tìm để chạy dự báo.")
+            else:
+                st.error("Không tìm thấy trong 100 số đầu. Hãy thử thay đổi 'Mục tiêu sản lượng' một chút.")
+            
+            st.stop() # Dừng lại ở đây
+
+    # --- NÚT CHẠY DỰ BÁO CHÍNH THỨC ---
+    if st.button("🚀 THỰC HIỆN DỰ BÁO", type="primary"):
+        try:
+            with st.spinner(f"Đang chạy mô hình với Seed = {selected_seed}..."):
+                # Gọi hàm mô phỏng với seed người dùng chọn
+                df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, "Final", user_seed=selected_seed)
                 
                 # Ghép với Thực tế
                 df_actual = df_train_org[['Năm', 'Tháng', 'Tổng thương phẩm']].copy()
@@ -264,13 +270,12 @@ if uploaded_train and uploaded_input:
                 if df_final['Thuc_te'].notnull().any():
                     ax.plot(df_final['ThoiGian'], df_final['Thuc_te'], 'o-', color='black', linewidth=3, label='Thực Tế', zorder=10)
 
-                ax.set_title("So Sánh Độ Bám Sát Của 3 Mô Hình")
+                ax.set_title(f"So Sánh Độ Bám Sát Của 3 Mô Hình (Seed={selected_seed})")
                 ax.set_ylabel("Sản lượng điện (kWh)")
                 ax.legend()
                 ax.grid(True, linestyle=':', alpha=0.6)
                 st.pyplot(fig)
                 
-                # Nút tải về
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_show.to_excel(writer, index=False, sheet_name='Ket_qua')
@@ -278,5 +283,3 @@ if uploaded_train and uploaded_input:
 
         except Exception as e:
             st.error(f"❌ Lỗi: {e}")
-
-
