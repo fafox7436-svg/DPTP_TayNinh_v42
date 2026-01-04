@@ -100,41 +100,51 @@ def train_and_predict(file_train, file_input, manual_events_dict):
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
     nn.fit(X_scaled, y)
     
-    # 3. SARIMA (Nâng cấp để bắt mùa vụ tốt hơn ARIMA thường)
+# 3. SARIMA (CẤU HÌNH TĂNG TRƯỞNG BỀN VỮNG)
     arima_fit = None
     if HAS_ARIMA:
         try:
             ts_data = data_clean.copy()
+            # 1. Tạo index thời gian chuẩn
             ts_data['Date'] = pd.to_datetime(dict(year=ts_data['Năm'], month=ts_data['Tháng'], day=1))
             ts_data = ts_data.sort_values('Date')
-            ts_series = ts_data.set_index('Date')[target].asfreq('MS')
             
-            # Cấu hình SARIMA: (p,d,q) x (P,D,Q,s)
-            # order=(1,1,1): Tự hồi quy 1 tháng trước
-            # seasonal_order=(1,1,0,12): Tự hồi quy theo chu kỳ 12 tháng (Mùa vụ)
+            # 2. Log Transform: Giúp ổn định dao động (tránh số quá to)
+            ts_series = ts_data.set_index('Date')[target].asfreq('MS')
+            ts_log = np.log(ts_series) 
+            
+            # 3. Cấu hình SARIMA (p,d,q) x (P,D,Q,s)
+            # order=(1, 1, 1): Có xu hướng tăng (d=1) nhưng có tự hồi quy (p=1) để bám sát quá khứ.
+            # seasonal_order=(0, 1, 1, 12): QUAN TRỌNG NHẤT!
+            # D=1 nghĩa là: Dự báo dựa trên sự chênh lệch so với CÙNG KỲ NĂM NGOÁI.
+            # Nó sẽ hiểu là: "Tháng 5 năm ngoái tăng thế nào, thì tháng 5 năm nay tăng tương tự", chứ không bốc đầu.
             try:
-                arima_model = ARIMA(ts_series, order=(1, 1, 1), seasonal_order=(1, 1, 0, 12))
+                arima_model = ARIMA(ts_log, order=(1, 1, 1), seasonal_order=(0, 1, 1, 12))
                 arima_fit = arima_model.fit()
             except:
-                # Nếu lỗi (do dữ liệu quá ngắn), thử cấu hình đơn giản hơn
-                arima_model = ARIMA(ts_series, order=(5, 1, 0))
+                # Fallback nếu dữ liệu quá ngắn (<24 tháng) không chạy được Seasonal
+                # Dùng (1,1,0) để vẫn có trend nhưng đơn giản
+                arima_model = ARIMA(ts_log, order=(1, 1, 0))
                 arima_fit = arima_model.fit()
         except: pass
 
-    # DỰ BÁO
+    # --- DỰ BÁO ---
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     if len(df_pred) == 0: return None, "File Input rỗng."
 
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
 
+    # Dự báo RF & NN
     df_pred['RF_Forecast'] = rf.predict(df_pred[valid_features])
     df_pred['NN_Forecast'] = nn.predict(scaler.transform(df_pred[valid_features]))
     
+    # Dự báo ARIMA (Bung nén Logarit)
     if arima_fit:
         try:
             steps = len(df_pred)
-            arima_vals = arima_fit.forecast(steps=steps)
-            df_pred['ARIMA_Forecast'] = arima_vals.values
+            log_forecast = arima_fit.forecast(steps=steps)
+            # Hàm exp để chuyển từ Log về số thực (kWh)
+            df_pred['ARIMA_Forecast'] = np.exp(log_forecast).values
         except: df_pred['ARIMA_Forecast'] = 0
     else: df_pred['ARIMA_Forecast'] = 0
 
@@ -247,3 +257,4 @@ if uploaded_train and uploaded_input:
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_result.drop(columns=['Date']).to_excel(writer, index=False)
             st.download_button("📥 Tải Báo Cáo Chi Tiết", buffer.getvalue(), "Ket_qua_so_sanh.xlsx")
+
