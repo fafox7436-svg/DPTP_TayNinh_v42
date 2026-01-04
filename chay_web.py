@@ -85,13 +85,16 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
     X_scaled = scaler.fit_transform(X)
 
     # --- 1. NEURAL NETWORK (CẤU HÌNH KÌM HÃM - CONSERVATIVE MODE) ---
-    # alpha=0.1: Tăng mức phạt (Regularization) để tránh phóng đại xu hướng
-    # hidden_layer_sizes=(50,): Một lớp rộng thay vì nhiều lớp sâu -> Ổn định hơn
+    # hidden_layer_sizes: Tăng độ sâu (3 lớp) để học được quy luật phức tạp của mùa nóng
+    # alpha=0.01: Mức phạt vừa phải. Đủ để kìm hãm sự phóng đại nhưng không làm mô hình bị "đơ".
+    # learning_rate_init=0.001: Tốc độ học chậm rãi, chắc chắn.
+    # max_iter=5000: Cho phép học lâu hơn để tìm ra điểm tối ưu.
     nn = MLPRegressor(
-        hidden_layer_sizes=(50, 50), 
+        hidden_layer_sizes=(100, 50, 25),  # Cấu trúc hình tháp ngược (Rất tốt cho dữ liệu dạng này)
         activation='relu', 
-        solver='lbfgs', 
-        alpha=0.5,  # <--- ĐÂY LÀ CHÌA KHÓA: Giá trị càng lớn, đường dự báo càng "khiêm tốn"
+        solver='adam',      # Đổi sang 'adam' vì nó ổn định hơn 'lbfgs' cho dữ liệu nhiễu
+        alpha=0.01,         # Giảm mức phạt xuống 0.01 (Nới lỏng tay một chút)
+        learning_rate_init=0.001,
         max_iter=5000, 
         random_state=42
     )
@@ -222,3 +225,4 @@ if uploaded_train and uploaded_input:
 
         except Exception as e:
             st.error(f"❌ Lỗi: {e}")
+
