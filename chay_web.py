@@ -48,7 +48,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     except Exception as e: return 0, f"❌ Lỗi xử lý: {str(e)}"
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (CẬP NHẬT ĐỦ 3 PHƯƠNG PHÁP)
+# 2. HÀM TÍNH TOÁN (ĐÃ TINH CHỈNH NEURAL NETWORK)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -84,11 +84,20 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # --- 1. NEURAL NETWORK ---
-    nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=0)
+    # --- 1. NEURAL NETWORK (CẤU HÌNH KÌM HÃM - CONSERVATIVE MODE) ---
+    # alpha=0.1: Tăng mức phạt (Regularization) để tránh phóng đại xu hướng
+    # hidden_layer_sizes=(50,): Một lớp rộng thay vì nhiều lớp sâu -> Ổn định hơn
+    nn = MLPRegressor(
+        hidden_layer_sizes=(50, 50), 
+        activation='relu', 
+        solver='lbfgs', 
+        alpha=0.5,  # <--- ĐÂY LÀ CHÌA KHÓA: Giá trị càng lớn, đường dự báo càng "khiêm tốn"
+        max_iter=5000, 
+        random_state=42
+    )
     nn.fit(X_scaled, y)
     
-    # --- 2. RANDOM FOREST (Đã thêm lại) ---
+    # --- 2. RANDOM FOREST ---
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
     rf.fit(X, y)
 
@@ -103,7 +112,7 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
     suffix = "" if scenario_label == "Final" else f"_{scenario_label}"
     
     df_pred[f'NN{suffix}'] = nn.predict(scaler.transform(df_pred[valid_features]))
-    df_pred[f'RF{suffix}'] = rf.predict(df_pred[valid_features]) # Random Forest
+    df_pred[f'RF{suffix}'] = rf.predict(df_pred[valid_features]) 
     df_pred[f'XGB{suffix}'] = xgb_model.predict(df_pred[valid_features])
     
     return df_pred[['Năm', 'Tháng', f'NN{suffix}', f'RF{suffix}', f'XGB{suffix}']]
@@ -148,7 +157,6 @@ if uploaded_train and uploaded_input:
 
             with st.spinner("Đang chạy so sánh 3 mô hình..."):
                 # 1. Chạy Kịch bản Điều chỉnh (Đây là kết quả cuối cùng để so sánh)
-                # Ta chỉ cần chạy 1 lần với tham số đầy đủ để so sánh 3 phương pháp với Thực tế
                 df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, "Final")
                 
                 # Ghép với Thực tế
@@ -159,7 +167,6 @@ if uploaded_train and uploaded_input:
 
                 # --- TÍNH TOÁN SAI SỐ (%) ---
                 mask = df_final['Thuc_te'].notnull()
-                # Tính toán sai số tuyệt đối (%) cho từng mô hình
                 df_final['Loi_NN(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['NN'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_RF(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['RF'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_XGB(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['XGB'])/df_final['Thuc_te']*100, np.nan)
@@ -178,10 +185,9 @@ if uploaded_train and uploaded_input:
                 df_show = df_final[['Năm'] + list(cols_display.keys())].rename(columns=cols_display)
                 
                 # --- LOGIC TÔ MÀU THEO YÊU CẦU ---
-                # Chỉ tô màu xanh cho các ô Sai số <= 1.5%
                 def highlight_accuracy(val):
                     if isinstance(val, float) and val <= 1.5:
-                        return 'background-color: #ccffcc; color: green; font-weight: bold' # Xanh lá
+                        return 'background-color: #ccffcc; color: green; font-weight: bold' 
                     return ''
 
                 st.dataframe(df_show.style.format({
@@ -196,16 +202,10 @@ if uploaded_train and uploaded_input:
                 st.subheader("📈 Biểu Đồ So Sánh 3 Phương Pháp")
                 fig, ax = plt.subplots(figsize=(14, 7))
                 
-                # 1. Đường Neural Network (Đỏ)
                 ax.plot(df_final['ThoiGian'], df_final['NN'], 's-', color='#d62728', label='Neural Network', linewidth=2, alpha=0.8)
-                
-                # 2. Đường Random Forest (Xanh dương - Nét đứt)
                 ax.plot(df_final['ThoiGian'], df_final['RF'], 'x--', color='#1f77b4', label='Random Forest', linewidth=1.5, alpha=0.7)
-                
-                # 3. Đường XGBoost (Xanh lá - Nét chấm gạch)
                 ax.plot(df_final['ThoiGian'], df_final['XGB'], '^-.', color='#2ca02c', label='XGBoost', linewidth=2, alpha=0.9)
 
-                # 4. Đường Thực tế (Đen đậm)
                 if df_final['Thuc_te'].notnull().any():
                     ax.plot(df_final['ThoiGian'], df_final['Thuc_te'], 'o-', color='black', linewidth=3, label='Thực Tế', zorder=10)
 
@@ -215,7 +215,6 @@ if uploaded_train and uploaded_input:
                 ax.grid(True, linestyle=':', alpha=0.6)
                 st.pyplot(fig)
                 
-                # Nút tải về
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_show.to_excel(writer, index=False, sheet_name='Ket_qua')
@@ -223,4 +222,3 @@ if uploaded_train and uploaded_input:
 
         except Exception as e:
             st.error(f"❌ Lỗi: {e}")
-
