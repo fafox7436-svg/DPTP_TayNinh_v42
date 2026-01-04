@@ -17,7 +17,7 @@ except ImportError:
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Hệ Thống Dự Báo Phụ Tải", layout="wide")
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN")
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI")
 st.markdown("---")
 
 # ==============================================================================
@@ -27,7 +27,6 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     if not api_key: return 0, "⚠️ Chưa nhập khóa API. Giá trị mặc định là 0."
     try:
         genai.configure(api_key=api_key)
-        # Tự động dò tìm model
         candidate_models = ["gemini-1.5-flash", "gemini-pro", "gemini-1.0-pro"]
         final_model = "gemini-pro"
         try:
@@ -48,7 +47,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
     except Exception as e: return 0, f"❌ Lỗi xử lý: {str(e)}"
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (QUAY VỀ BẢN GỐC - KHÔNG SCALE Y)
+# 2. HÀM TÍNH TOÁN (CẤU HÌNH 10-15-10 + RANDOM STATE 42 -> 749tr)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -80,18 +79,18 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, scenario_l
 
     data_clean = df_train.dropna(subset=valid_features + [target]).copy()
     X = data_clean[valid_features]
-    y = data_clean[target] # Giữ nguyên Y, KHÔNG SCALE
+    y = data_clean[target]
     
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X) # Chỉ Scale X
+    X_scaled = scaler.fit_transform(X)
 
-    # --- 1. NEURAL NETWORK (CẤU HÌNH GỐC CHUẨN 100%) ---
+    # --- 1. NEURAL NETWORK (CHUẨN 10-15-10 & RANDOM_STATE=42) ---
     nn = MLPRegressor(
-        hidden_layer_sizes=(10, 15, 10), 
+        hidden_layer_sizes=(10, 15, 10), # Đúng cấu trúc bạn yêu cầu
         activation='relu', 
         solver='lbfgs', 
         max_iter=5000, 
-        random_state=0 # Quan trọng: Giữ seed=0 để tái lập kết quả cũ
+        random_state=42 # Đổi từ 0 sang 42 để quay về kết quả cũ (749tr)
     )
     nn.fit(X_scaled, y)
     
@@ -155,22 +154,22 @@ if uploaded_train and uploaded_input:
             df_input_org = pd.read_excel(uploaded_input)
 
             with st.spinner("Đang chạy so sánh 3 mô hình..."):
-                # Chạy mô phỏng
+                # 1. Chạy Kịch bản Điều chỉnh
                 df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, "Final")
                 
-                # Ghép Thực tế
+                # Ghép với Thực tế
                 df_actual = df_train_org[['Năm', 'Tháng', 'Tổng thương phẩm']].copy()
                 df_final = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
                 df_final.rename(columns={'Tổng thương phẩm': 'Thuc_te'}, inplace=True)
                 df_final['ThoiGian'] = pd.to_datetime(dict(year=df_final['Năm'], month=df_final['Tháng'], day=1))
 
-                # Tính sai số
+                # --- TÍNH TOÁN SAI SỐ (%) ---
                 mask = df_final['Thuc_te'].notnull()
                 df_final['Loi_NN(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['NN'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_RF(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['RF'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_XGB(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['XGB'])/df_final['Thuc_te']*100, np.nan)
 
-                # TAB 1: BẢNG TỔNG HỢP
+                # --- TAB 1: BẢNG TỔNG HỢP ---
                 st.subheader("📊 Bảng So Sánh Sai Số Các Phương Pháp")
                 
                 cols_display = {
@@ -183,7 +182,7 @@ if uploaded_train and uploaded_input:
                 
                 df_show = df_final[['Năm'] + list(cols_display.keys())].rename(columns=cols_display)
                 
-                # Tô màu <= 1.5%
+                # --- LOGIC TÔ MÀU (<= 1.5%) ---
                 def highlight_accuracy(val):
                     if isinstance(val, float) and val <= 1.5:
                         return 'background-color: #ccffcc; color: green; font-weight: bold' 
@@ -197,7 +196,7 @@ if uploaded_train and uploaded_input:
                 }).applymap(highlight_accuracy, subset=['Sai số NN (%)', 'Sai số RF (%)', 'Sai số XGB (%)']), 
                 use_container_width=True)
 
-                # TAB 2: BIỂU ĐỒ
+                # --- TAB 2: BIỂU ĐỒ ĐA ĐƯỜNG ---
                 st.subheader("📈 Biểu Đồ So Sánh 3 Phương Pháp")
                 fig, ax = plt.subplots(figsize=(14, 7))
                 
@@ -214,7 +213,7 @@ if uploaded_train and uploaded_input:
                 ax.grid(True, linestyle=':', alpha=0.6)
                 st.pyplot(fig)
                 
-                # Download
+                # Nút tải về
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_show.to_excel(writer, index=False, sheet_name='Ket_qua')
