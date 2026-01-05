@@ -10,7 +10,14 @@ import io
 import requests
 from bs4 import BeautifulSoup
 
-# Kiểm tra thư viện Gemini
+# --- KIỂM TRA THƯ VIỆN CHỐNG SẬP ---
+try:
+    import requests
+    from bs4 import BeautifulSoup
+    HAS_SCRAPER = True
+except ImportError:
+    HAS_SCRAPER = False
+
 try:
     import google.generativeai as genai
     HAS_GEMINI = True
@@ -19,27 +26,27 @@ except ImportError:
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Hệ Thống Dự Báo Phụ Tải", layout="wide")
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI")
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN")
 st.markdown("---")
 
 # ==============================================================================
-# 1. MODULE ĐỌC LINK & AI (GIỮ NGUYÊN TÍNH NĂNG MẠNH MẼ NÀY)
+# 1. MODULE ĐỌC LINK & AI
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
+    if not HAS_SCRAPER: return None, "⚠️ Thiếu thư viện đọc web. Hãy dán Text."
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
-            paragraphs = soup.find_all('p')
-            text_content = " ".join([p.get_text() for p in paragraphs])
-            if len(text_content) < 50: return None, "⚠️ Trang web chặn bot, hãy copy text dán vào."
-            return text_content, "✅ Đã đọc xong link!"
-        return None, f"⚠️ Lỗi truy cập link: {response.status_code}"
+            text_content = " ".join([p.get_text() for p in soup.find_all('p')])
+            if len(text_content) < 50: return None, "⚠️ Web chặn bot, hãy copy text."
+            return text_content, "✅ Đã đọc link!"
+        return None, f"⚠️ Lỗi link: {response.status_code}"
     except Exception as e: return None, f"❌ Lỗi: {str(e)}"
 
 def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
-    if not api_key: return 0.0, "⚠️ Chưa nhập khóa API.", ""
+    if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", ""
     
     final_text = input_data
     status_msg = ""
@@ -53,7 +60,6 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
 
     try:
         genai.configure(api_key=api_key)
-        # Tự động chọn model
         final_model = "gemini-pro"
         try:
             for m in genai.list_models():
@@ -64,9 +70,9 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
 
         model = genai.GenerativeModel(final_model)
         prompt = (
-            f"Bạn là chuyên gia điện lực. Đọc tin sau: '{final_text[:4000]}'. "
-            "Nhiệm vụ: Xác định % tăng/giảm sản lượng điện và giải thích ngắn gọn. "
-            "Format trả về: SỐ | LÝ DO. (Ví dụ: -1.5 | Vì có chỉ thị tiết giảm 1.5%)"
+            f"Đọc tin sau: '{final_text[:4000]}'. "
+            "Xác định % tăng/giảm sản lượng điện. "
+            "Trả về: SỐ | LÝ DO. (VD: -1.5 | Giảm 1.5%)"
         )
         response = model.generate_content(prompt)
         text_res = response.text.strip()
@@ -80,13 +86,12 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
             if match:
                 val = float(match.group())
                 val = max(min(val, 20.0), -20.0)
-                return val, f"{status_msg}✅ Đã phân tích xong!", reason
-        
-        return 0.0, "⚠️ Không xác định được số liệu.", ""
+                return val, f"{status_msg}✅ Xong!", reason
+        return 0.0, "⚠️ Không rõ số liệu.", ""
     except Exception as e: return 0.0, f"❌ Lỗi AI: {str(e)}", ""
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (ĐÃ SỬA: HIỆN ĐỦ 3 MÔ HÌNH)
+# 2. HÀM TÍNH TOÁN (ĐÃ BỎ CACHE ĐỂ FIX LỖI 0%)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -100,12 +105,11 @@ def feature_engineering(df):
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6, 7, 8, 9, 10, 11] else 0)
     return df
 
-@st.cache_data
+# --- QUAN TRỌNG: KHÔNG DÙNG @st.cache_data Ở ĐÂY NỮA ---
 def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed):
     df_train = df_train_origin.copy()
     df_input = df_input_origin.copy()
 
-    # GIỮ CẤU TRÚC 749TR
     df_train['Bien_Ngoai_Sinh'] = 0 
     df_input['Bien_Ngoai_Sinh'] = 0
 
@@ -123,19 +127,17 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # 1. NEURAL NETWORK
+    # MODELS
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=user_seed)
     nn.fit(X_scaled, y)
     
-    # 2. RANDOM FOREST
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
     rf.fit(X, y)
 
-    # 3. XGBOOST
     xgb_model = xgb.XGBRegressor(n_estimators=50, learning_rate=0.1, max_depth=2, subsample=0.7, random_state=42, n_jobs=-1)
     xgb_model.fit(X, y)
 
-    # DỰ BÁO BASELINE
+    # PREDICT
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
@@ -143,12 +145,17 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed)
     base_rf = rf.predict(df_pred[valid_features])
     base_xgb = xgb_model.predict(df_pred[valid_features])
     
-    # --- ÁP DỤNG ĐIỀU CHỈNH CHO CẢ 3 MODEL ---
+    # ADJUSTMENT
     def get_adjustment_details(row):
+        # Lấy giá trị % từ dict tham số
         data = exogenous_params.get((int(row['Năm']), int(row['Tháng'])), (0.0, ""))
-        pct_change = data[0]
+        pct_change = float(data[0]) # Đảm bảo là float
         reason = data[1]
-        factor = 1.0 + (float(pct_change) / 100.0)
+        
+        # Hệ số = 1 + (pct / 100)
+        # VD: pct = 0 -> factor = 1.0 (Giữ nguyên)
+        # VD: pct = -1.2 -> factor = 0.988
+        factor = 1.0 + (pct_change / 100.0)
         return pct_change, factor, reason
 
     adj_data = df_pred.apply(get_adjustment_details, axis=1, result_type='expand')
@@ -156,7 +163,7 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed)
     df_pred['Adj_Factor'] = adj_data[1]
     df_pred['Lý do AI'] = adj_data[2]
 
-    # CẢ 3 ĐỀU BỊ ẢNH HƯỞNG BỞI GEMINI
+    # ÁP DỤNG HỆ SỐ
     df_pred['NN'] = base_nn * df_pred['Adj_Factor']
     df_pred['RF'] = base_rf * df_pred['Adj_Factor']
     df_pred['XGB'] = base_xgb * df_pred['Adj_Factor']
@@ -171,6 +178,12 @@ with st.sidebar:
     api_key = st.text_input("Nhập Khóa API", value="", type="password")
     st.markdown("---")
     selected_seed = st.number_input("Random Seed", value=42, step=1)
+    
+    # NÚT RESET CACHE QUAN TRỌNG
+    if st.button("🔄 Xóa Cache & Làm Mới"):
+        st.cache_data.clear()
+        if 'param_dict' in st.session_state: del st.session_state.param_dict
+        st.rerun()
 
 col1, col2 = st.columns(2)
 with col1: uploaded_train = st.file_uploader("1. Dữ liệu Lịch sử (Train)", type=['xlsx', 'xls'])
@@ -186,7 +199,8 @@ c1, c2 = st.columns([2, 1])
 if 'detected_months' not in st.session_state: st.session_state.detected_months = []
 
 with c1: 
-    text_data = st.text_area("Nhập Link bài báo hoặc Copy nội dung:", height=100, placeholder="Ví dụ: https://evn.com.vn... hoặc dán text.")
+    placeholder_text = "Dán Link bài báo vào đây." if HAS_SCRAPER else "Hãy dán nội dung văn bản vào đây."
+    text_data = st.text_area("Nhập Link hoặc Nội dung:", height=100, placeholder=placeholder_text)
 
 with c2:
     if uploaded_input:
@@ -210,17 +224,15 @@ if 'detected_months' in st.session_state and st.session_state.detected_months:
     st.write("---")
     st.write("### 🛠️ Thiết Lập Kịch Bản:")
     
-    current_reason = st.session_state.get('temp_reason', "")
-    if current_reason: st.info(f"💡 **Lý do AI:** {current_reason}")
-    
     c_a, c_b = st.columns(2)
     with c_a:
         months_str = [f"Tháng {m}/{y}" for y, m in st.session_state.detected_months]
         selected_months_str = st.multiselect("Chọn tháng áp dụng:", months_str, default=months_str)
     
     with c_b:
-        current_score = st.session_state.get('temp_score', 0.0)
-        final_score = st.number_input("Gemini đề xuất (%) - Bạn có thể sửa:", value=float(current_score), step=0.1, format="%.2f")
+        # Lấy giá trị hiện tại (nếu chưa có thì lấy từ AI)
+        current_val = st.session_state.get('temp_score', 0.0)
+        final_score = st.number_input("Điều chỉnh % (Nhập 0 để Hủy):", value=float(current_val), step=0.1, format="%.2f")
     
     if st.button("Lưu Kịch Bản"):
         st.session_state.param_dict = {}
@@ -228,7 +240,8 @@ if 'detected_months' in st.session_state and st.session_state.detected_months:
             parts = s.split('/')
             m = int(parts[0].replace('Tháng ', ''))
             y = int(parts[1])
-            st.session_state.param_dict[(y, m)] = (final_score, current_reason)
+            # Lưu giá trị vào dict
+            st.session_state.param_dict[(y, m)] = (final_score, st.session_state.get('temp_reason', ''))
         st.success(f"Đã lưu: {final_score}% cho các tháng chọn.")
 
 st.write("---")
@@ -241,7 +254,7 @@ if uploaded_train and uploaded_input:
             except: df_train_org = pd.read_excel(uploaded_train, sheet_name=0)
             df_input_org = pd.read_excel(uploaded_input)
 
-            with st.spinner(f"Đang chạy mô hình (Seed={selected_seed})..."):
+            with st.spinner(f"Đang tính toán lại (Seed={selected_seed})..."):
                 df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, selected_seed)
                 
                 df_actual = df_train_org[['Năm', 'Tháng', 'Tổng thương phẩm']].copy()
@@ -254,21 +267,20 @@ if uploaded_train and uploaded_input:
                 df_final['Loi_RF(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['RF'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_XGB(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['XGB'])/df_final['Thuc_te']*100, np.nan)
 
-                st.subheader("📊 Bảng Kết Quả (Đã bao gồm điều chỉnh của Gemini)")
+                st.subheader("📊 Bảng Kết Quả Chi Tiết")
                 
                 df_final['Gemini (%)'] = df_final['Gemini_Pct'].apply(lambda x: f"{x:+.2f}%" if x != 0 else "-")
                 
-                # --- ĐÃ SỬA: HIỆN ĐỦ 3 MÔ HÌNH VÀ BỎ CỘT 'GỐC' ---
                 cols_display = {
                     'Tháng': 'Tháng',
                     'Thuc_te': 'Thực Tế',
                     'Gemini (%)': 'Gemini (%)',
                     'Lý do AI': 'Lý do Điều Chỉnh',
-                    'NN': 'Neural Network',      # Đây là giá trị cuối cùng
+                    'NN': 'Neural Network',      
                     'Loi_NN(%)': 'Sai số NN (%)',
-                    'RF': 'Random Forest',       # Đã thêm lại ông này
+                    'RF': 'Random Forest',       
                     'Loi_RF(%)': 'Sai số RF (%)',
-                    'XGB': 'XGBoost',            # Đây là giá trị cuối cùng
+                    'XGB': 'XGBoost',            
                     'Loi_XGB(%)': 'Sai số XGB (%)'
                 }
                 
@@ -287,10 +299,8 @@ if uploaded_train and uploaded_input:
                 }).applymap(highlight_accuracy, subset=['Sai số NN (%)', 'Sai số RF (%)', 'Sai số XGB (%)']), 
                 use_container_width=True)
 
-                st.subheader("📈 Biểu Đồ So Sánh 3 Phương Pháp")
+                st.subheader("📈 Biểu Đồ So Sánh")
                 fig, ax = plt.subplots(figsize=(14, 7))
-                
-                # Vẽ 3 đường đã chỉnh
                 ax.plot(df_final['ThoiGian'], df_final['NN'], 's-', color='#d62728', label='Neural Network', linewidth=2)
                 ax.plot(df_final['ThoiGian'], df_final['RF'], 'x--', color='#1f77b4', label='Random Forest', linewidth=1.5, alpha=0.7)
                 ax.plot(df_final['ThoiGian'], df_final['XGB'], '^-.', color='#2ca02c', label='XGBoost', linewidth=2, alpha=0.9)
