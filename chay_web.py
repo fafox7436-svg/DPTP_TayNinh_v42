@@ -45,15 +45,14 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
         match = re.search(r'-?\d+', response.text)
         if match: 
             val = int(match.group())
-            # --- CHỐT CHẶN AN TOÀN TẠI ĐÂY ---
-            # Ép giá trị phải nằm trong khoảng [-3, 3] để tránh Gemini "chém gió" quá đà
+            # Chốt chặn an toàn: [-3, 3]
             val = max(min(val, 3), -3) 
             return val, f"✅ Điểm tác động: {val}"
         return 0, "⚠️ Không xác định được mức độ."
     except Exception as e: return 0, f"❌ Lỗi xử lý: {str(e)}"
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (CÓ HIỂN THỊ CHI TIẾT CÁCH TÍNH)
+# 2. HÀM TÍNH TOÁN (ĐÃ BỎ CACHE ĐỂ CẬP NHẬT TỨC THÌ)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -67,7 +66,7 @@ def feature_engineering(df):
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6, 7, 8, 9, 10, 11] else 0)
     return df
 
-@st.cache_data
+# --- QUAN TRỌNG: ĐÃ BỎ @st.cache_data ĐỂ ÉP TÍNH LẠI ---
 def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed, sensitivity):
     df_train = df_train_origin.copy()
     df_input = df_input_origin.copy()
@@ -102,17 +101,18 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed,
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
-    # Dự báo nền (Baseline)
+    # Dự báo nền (Baseline - Chưa điều chỉnh)
     base_nn = nn.predict(scaler.transform(df_pred[valid_features]))
     base_rf = rf.predict(df_pred[valid_features])
     base_xgb = xgb_model.predict(df_pred[valid_features])
     
     # --- LOGIC ĐIỀU CHỈNH MINH BẠCH ---
     def get_adjustment_details(row):
+        # Lấy điểm số từ Gemini (nếu không có thì = 0)
         score = exogenous_params.get((int(row['Năm']), int(row['Tháng'])), 0)
+        
         # Công thức: Hệ số = 1 + (Điểm * Độ_nhạy)
-        # Ví dụ: Điểm -1 * 0.012 = -0.012 -> Hệ số 0.988 (Giảm 1.2%)
-        factor = 1 + (score * sensitivity)
+        factor = 1.0 + (float(score) * float(sensitivity))
         return score, factor
 
     # Tính toán từng dòng
@@ -120,7 +120,7 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed,
     df_pred['Gemini_Score'] = adj_data[0]   # Cột điểm số (-1, -2...)
     df_pred['Adj_Factor'] = adj_data[1]     # Cột hệ số nhân (0.988...)
 
-    # Áp dụng
+    # Áp dụng nhân hệ số
     df_pred['NN'] = base_nn * df_pred['Adj_Factor']
     df_pred['RF'] = base_rf * df_pred['Adj_Factor']
     df_pred['XGB'] = base_xgb * df_pred['Adj_Factor']
@@ -201,8 +201,8 @@ if uploaded_train and uploaded_input:
                 cols_display = {
                     'Tháng': 'Tháng',
                     'Thuc_te': 'Thực Tế',
-                    'Điểm Gemini': 'Điểm Gemini', # Cột mới để debug
-                    'Hệ số ĐC': 'Hệ số ĐC',       # Cột mới để debug
+                    'Điểm Gemini': 'Điểm Gemini', 
+                    'Hệ số ĐC': 'Hệ số ĐC',       
                     'NN': 'Neural Net', 'Loi_NN(%)': 'Sai số NN (%)',
                     'RF': 'Random Forest', 'Loi_RF(%)': 'Sai số RF (%)',
                     'XGB': 'XGBoost', 'Loi_XGB(%)': 'Sai số XGB (%)'
