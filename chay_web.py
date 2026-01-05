@@ -17,7 +17,7 @@ except ImportError:
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Hệ Thống Dự Báo Phụ Tải", layout="wide")
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI")
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH LONG AN")
 st.markdown("---")
 
 # ==============================================================================
@@ -37,18 +37,23 @@ def xu_ly_du_lieu_dinh_tinh(api_key, text_input):
         except: pass
 
         model = genai.GenerativeModel(final_model)
-        # Prompt kỹ: Yêu cầu đánh giá mức độ từ -3 đến 3
-        prompt = f"Đánh giá tác động của tin tức sau đến phụ tải điện (Số nguyên từ -3 đến 3). -3 là giảm rất mạnh, 0 là không đổi, 3 là tăng rất mạnh. Tin: '{text_input}'. Chỉ trả về 1 số nguyên."
+        # Prompt: Yêu cầu trả về số nguyên nhỏ, giới hạn rõ ràng
+        prompt = f"Đánh giá tác động của tin tức sau đến phụ tải điện (-3 là giảm mạnh, -1 là giảm nhẹ, 0 là không đổi, 1 là tăng nhẹ, 3 là tăng mạnh). Tin: '{text_input}'. Chỉ trả về 1 số nguyên duy nhất."
         response = model.generate_content(prompt)
         
         import re
         match = re.search(r'-?\d+', response.text)
-        if match: return int(match.group()), f"✅ Điểm tác động Gemini: {match.group()}"
+        if match: 
+            val = int(match.group())
+            # --- CHỐT CHẶN AN TOÀN TẠI ĐÂY ---
+            # Ép giá trị phải nằm trong khoảng [-3, 3] để tránh Gemini "chém gió" quá đà
+            val = max(min(val, 3), -3) 
+            return val, f"✅ Điểm tác động: {val}"
         return 0, "⚠️ Không xác định được mức độ."
     except Exception as e: return 0, f"❌ Lỗi xử lý: {str(e)}"
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (DỰ BÁO CHUẨN + ĐIỀU CHỈNH %)
+# 2. HÀM TÍNH TOÁN (CÓ HIỂN THỊ CHI TIẾT CÁCH TÍNH)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -64,17 +69,12 @@ def feature_engineering(df):
 
 @st.cache_data
 def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed, sensitivity):
-    """
-    sensitivity: Độ nhạy (ví dụ 0.012 tức là 1.2%)
-    """
     df_train = df_train_origin.copy()
     df_input = df_input_origin.copy()
 
-    # Feature Engineering
     df_train = feature_engineering(df_train)
     df_input = feature_engineering(df_input)
 
-    # Train mô hình trên dữ liệu sạch (Baseline)
     features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 'Co_Tet', 'Mua_Nong', 'Mua_Mua']
     valid_features = [f for f in features if f in df_train.columns and f in df_input.columns]
     target = 'Tổng thương phẩm'
@@ -86,7 +86,7 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed,
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # 1. NEURAL NETWORK
+    # 1. NEURAL NETWORK (Seed từ người dùng)
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=user_seed)
     nn.fit(X_scaled, y)
     
@@ -98,45 +98,50 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed,
     xgb_model = xgb.XGBRegressor(n_estimators=50, learning_rate=0.1, max_depth=2, subsample=0.7, random_state=42, n_jobs=-1)
     xgb_model.fit(X, y)
 
-    # --- DỰ BÁO & ĐIỀU CHỈNH ---
+    # DỰ BÁO
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
-    # Bước 1: Dự báo nền
+    # Dự báo nền (Baseline)
     base_nn = nn.predict(scaler.transform(df_pred[valid_features]))
     base_rf = rf.predict(df_pred[valid_features])
     base_xgb = xgb_model.predict(df_pred[valid_features])
     
-    # Bước 2: Tính hệ số điều chỉnh (Sensitivity)
-    def get_adj_factor(row):
+    # --- LOGIC ĐIỀU CHỈNH MINH BẠCH ---
+    def get_adjustment_details(row):
         score = exogenous_params.get((int(row['Năm']), int(row['Tháng'])), 0)
-        return 1 + (score * sensitivity)
+        # Công thức: Hệ số = 1 + (Điểm * Độ_nhạy)
+        # Ví dụ: Điểm -1 * 0.012 = -0.012 -> Hệ số 0.988 (Giảm 1.2%)
+        factor = 1 + (score * sensitivity)
+        return score, factor
 
-    df_pred['Adj_Factor'] = df_pred.apply(get_adj_factor, axis=1)
+    # Tính toán từng dòng
+    adj_data = df_pred.apply(get_adjustment_details, axis=1, result_type='expand')
+    df_pred['Gemini_Score'] = adj_data[0]   # Cột điểm số (-1, -2...)
+    df_pred['Adj_Factor'] = adj_data[1]     # Cột hệ số nhân (0.988...)
 
-    # Bước 3: Áp dụng
+    # Áp dụng
     df_pred['NN'] = base_nn * df_pred['Adj_Factor']
     df_pred['RF'] = base_rf * df_pred['Adj_Factor']
     df_pred['XGB'] = base_xgb * df_pred['Adj_Factor']
     
-    return df_pred[['Năm', 'Tháng', 'NN', 'RF', 'XGB', 'Adj_Factor']]
+    return df_pred[['Năm', 'Tháng', 'NN', 'RF', 'XGB', 'Gemini_Score', 'Adj_Factor']]
 
 # ==============================================================================
 # GIAO DIỆN
 # ==============================================================================
 with st.sidebar:
     st.header("⚙️ Cấu Hình Hệ Thống")
-    api_key = st.text_input("Nhập Khóa API (Google GenAI)", value="", type="password")
+    api_key = st.text_input("Nhập Khóa API", value="", type="password")
     
     st.markdown("---")
     st.caption("Thông số kỹ thuật:")
     selected_seed = st.number_input("Random Seed (Hạt giống)", value=42, step=1)
     
-    # --- CẬP NHẬT: ĐỘ NHẠY MẶC ĐỊNH 1.2% ---
     st.markdown("---")
-    st.caption("🎛️ Điều chỉnh độ nhạy Gemini:")
-    # value=1.2 (Mặc định), step=0.1 (Chỉnh nhuyễn hơn)
-    sensitivity_pct = st.slider("Mỗi 1 điểm Gemini thay đổi bao nhiêu % sản lượng?", 0.1, 5.0, 1.2, 0.1)
+    st.caption("🎛️ Điều chỉnh độ nhạy:")
+    # Mặc định 1.2%
+    sensitivity_pct = st.slider("Mức giảm/tăng cho mỗi 1 điểm (-1/+1):", 0.1, 5.0, 1.2, 0.1, format="%.1f%%")
     sensitivity = sensitivity_pct / 100.0
 
 col1, col2 = st.columns(2)
@@ -149,10 +154,10 @@ if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 # PHẦN 1: PHÂN TÍCH TIN TỨC
 st.subheader("📰 Phân Tích Thông Tin & Kịch Bản")
 c1, c2 = st.columns([2, 1])
-with c1: text_data = st.text_area("Nội dung thông tin / Sự kiện:", height=100, placeholder="Ví dụ: Kinh tế suy giảm nhẹ, cắt giảm sản xuất...")
+with c1: text_data = st.text_area("Nội dung thông tin:", height=100)
 with c2:
     if st.button("Phân Tích AI"):
-        with st.spinner("AI đang đọc hiểu..."):
+        with st.spinner("AI đang tính toán..."):
             val, log = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
         if "Lỗi" in log: st.warning(log)
         else: st.success(log)
@@ -160,7 +165,8 @@ with c2:
         st.session_state.param_dict[(2025, 6)] = val
 
 if st.session_state.param_dict:
-    st.info(f"⚡ Đang áp dụng kịch bản: {st.session_state.param_dict} | Độ nhạy: {sensitivity_pct}% mỗi điểm")
+    st.info(f"⚡ Kịch bản đang áp dụng: {st.session_state.param_dict}")
+    st.caption(f"Giải thích: Mỗi điểm -1 sẽ làm giảm {sensitivity_pct}% sản lượng.")
 
 st.write("---")
 
@@ -173,31 +179,30 @@ if uploaded_train and uploaded_input:
             df_input_org = pd.read_excel(uploaded_input)
 
             with st.spinner(f"Đang chạy mô hình (Seed={selected_seed})..."):
-                # Gọi hàm tính toán
                 df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, selected_seed, sensitivity)
                 
-                # Ghép dữ liệu thực tế
                 df_actual = df_train_org[['Năm', 'Tháng', 'Tổng thương phẩm']].copy()
                 df_final = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
                 df_final.rename(columns={'Tổng thương phẩm': 'Thuc_te'}, inplace=True)
                 df_final['ThoiGian'] = pd.to_datetime(dict(year=df_final['Năm'], month=df_final['Tháng'], day=1))
 
-                # Tính sai số
                 mask = df_final['Thuc_te'].notnull()
                 df_final['Loi_NN(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['NN'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_RF(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['RF'])/df_final['Thuc_te']*100, np.nan)
                 df_final['Loi_XGB(%)'] = np.where(mask, abs(df_final['Thuc_te'] - df_final['XGB'])/df_final['Thuc_te']*100, np.nan)
 
-                # HIỂN THỊ
-                st.subheader("📊 Bảng So Sánh Sai Số (Đã Điều Chỉnh Theo Kịch Bản)")
+                # HIỂN THỊ CHI TIẾT
+                st.subheader("📊 Bảng Chi Tiết Kết Quả & Điều Chỉnh")
                 
-                # Cột Hệ số điều chỉnh
-                df_final['Hệ số ĐC'] = df_final['Adj_Factor'].apply(lambda x: f"{x:.3f}x") # Hiện 3 số lẻ cho chi tiết (vd: 0.988x)
+                # Format cột Điểm số và Hệ số để bạn kiểm tra
+                df_final['Điểm Gemini'] = df_final['Gemini_Score'].astype(int)
+                df_final['Hệ số ĐC'] = df_final['Adj_Factor'].apply(lambda x: f"{x:.3f}x")
                 
                 cols_display = {
                     'Tháng': 'Tháng',
                     'Thuc_te': 'Thực Tế',
-                    'Hệ số ĐC': 'Hệ số Gemini',
+                    'Điểm Gemini': 'Điểm Gemini', # Cột mới để debug
+                    'Hệ số ĐC': 'Hệ số ĐC',       # Cột mới để debug
                     'NN': 'Neural Net', 'Loi_NN(%)': 'Sai số NN (%)',
                     'RF': 'Random Forest', 'Loi_RF(%)': 'Sai số RF (%)',
                     'XGB': 'XGBoost', 'Loi_XGB(%)': 'Sai số XGB (%)'
@@ -228,15 +233,14 @@ if uploaded_train and uploaded_input:
                 if df_final['Thuc_te'].notnull().any():
                     ax.plot(df_final['ThoiGian'], df_final['Thuc_te'], 'o-', color='black', linewidth=3, label='Thực Tế', zorder=10)
 
-                ax.set_title(f"Dự Báo Với Kịch Bản Điều Chỉnh (Độ nhạy {sensitivity_pct}%/điểm)")
-                ax.set_ylabel("Sản lượng điện (kWh)")
+                ax.set_title(f"Dự Báo (Độ nhạy {sensitivity_pct}%/điểm)")
                 ax.legend()
                 ax.grid(True, linestyle=':', alpha=0.6)
                 st.pyplot(fig)
                 
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    df_show.to_excel(writer, index=False, sheet_name='Ket_qua_Dieu_chinh')
+                    df_show.to_excel(writer, index=False, sheet_name='Ket_qua')
                 st.download_button("📥 Tải Báo Cáo Excel", buffer.getvalue(), "Ket_qua_Forecast.xlsx")
 
         except Exception as e:
