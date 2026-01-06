@@ -7,7 +7,7 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
 import xgboost as xgb
 import io
-import time # Thêm thư viện thời gian
+import time # Dùng để tạo ID ngẫu nhiên theo thời gian thực
 
 # --- KIỂM TRA THƯ VIỆN ---
 try:
@@ -25,7 +25,7 @@ except ImportError:
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Hệ Thống Dự Báo Phụ Tải", layout="wide")
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN")
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH LONG AN")
 st.markdown("---")
 
 # ==============================================================================
@@ -90,7 +90,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
     except Exception as e: return 0.0, f"❌ Lỗi AI: {str(e)}", ""
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (ĐÃ GẮN THAM SỐ THỜI GIAN ĐỂ ÉP CHẠY LẠI)
+# 2. HÀM TÍNH TOÁN (ĐÃ BỎ CACHE HOÀN TOÀN)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -104,9 +104,8 @@ def feature_engineering(df):
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6, 7, 8, 9, 10, 11] else 0)
     return df
 
-# Vẫn giữ cache để nhanh, nhưng thêm tham số 't_stamp' để ép chạy lại khi cần
-@st.cache_data
-def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed, t_stamp):
+# KHÔNG DÙNG CACHE NỮA - ÉP CHẠY LẠI MỖI LẦN
+def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed):
     df_train = df_train_origin.copy()
     df_input = df_input_origin.copy()
 
@@ -147,12 +146,9 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed,
     
     # ADJUSTMENT
     def get_adjustment_details(row):
-        # Lấy giá trị % từ dict tham số (ép kiểu float cho chắc chắn)
         data = exogenous_params.get((int(row['Năm']), int(row['Tháng'])), (0.0, ""))
-        try:
-            pct_change = float(data[0])
+        try: pct_change = float(data[0])
         except: pct_change = 0.0
-            
         reason = data[1]
         factor = 1.0 + (pct_change / 100.0)
         return pct_change, factor, reason
@@ -162,7 +158,6 @@ def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed,
     df_pred['Adj_Factor'] = adj_data[1]
     df_pred['Lý do AI'] = adj_data[2]
 
-    # ÁP DỤNG HỆ SỐ
     df_pred['NN'] = base_nn * df_pred['Adj_Factor']
     df_pred['RF'] = base_rf * df_pred['Adj_Factor']
     df_pred['XGB'] = base_xgb * df_pred['Adj_Factor']
@@ -178,10 +173,11 @@ with st.sidebar:
     st.markdown("---")
     selected_seed = st.number_input("Random Seed", value=42, step=1)
     
-    if st.button("🔄 Hard Reset (Xóa hết dữ liệu)"):
+    # NÚT XÓA SỔ DỮ LIỆU CŨ
+    if st.button("🗑️ XÓA HẾT DỮ LIỆU CŨ", type="secondary"):
         st.cache_data.clear()
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+        if 'param_dict' in st.session_state: del st.session_state.param_dict
+        if 'final_result' in st.session_state: del st.session_state.final_result
         st.rerun()
 
 col1, col2 = st.columns(2)
@@ -189,7 +185,6 @@ with col1: uploaded_train = st.file_uploader("1. Dữ liệu Lịch sử (Train)
 with col2: uploaded_input = st.file_uploader("2. Dữ liệu Dự báo (Input)", type=['xlsx', 'xls'])
 
 st.write("---")
-# Đảm bảo khởi tạo dict mới mỗi lần nếu chưa có
 if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 
 # PHẦN 1: PHÂN TÍCH
@@ -230,40 +225,42 @@ if 'detected_months' in st.session_state and st.session_state.detected_months:
         selected_months_str = st.multiselect("Chọn tháng áp dụng:", months_str, default=months_str)
     
     with c_b:
-        # Lấy giá trị hiện tại
         current_val = st.session_state.get('temp_score', 0.0)
         final_score = st.number_input("Điều chỉnh % (Nhập 0 để Hủy):", value=float(current_val), step=0.1, format="%.2f")
     
     if st.button("Lưu Kịch Bản"):
-        # XÓA DICT CŨ ĐI ĐỂ ĐẢM BẢO KHÔNG CÒN RÁC
         temp_dict = {} 
         for s in selected_months_str:
             parts = s.split('/')
             m = int(parts[0].replace('Tháng ', ''))
             y = int(parts[1])
             temp_dict[(y, m)] = (final_score, st.session_state.get('temp_reason', ''))
-        
-        # Cập nhật vào session state
         st.session_state.param_dict = temp_dict
-        st.success(f"Đã lưu: {final_score}% cho các tháng chọn. (Các tháng khác về 0%)")
+        st.success(f"Đã lưu: {final_score}% cho các tháng chọn.")
 
 st.write("---")
 
 # PHẦN 2: CHẠY DỰ BÁO
 if uploaded_train and uploaded_input:
+    # TẠO ID MỚI MỖI LẦN BẤM NÚT ĐỂ ÉP CHẠY LẠI
     if st.button("🚀 THỰC HIỆN DỰ BÁO", type="primary"):
+        # Xóa kết quả cũ nếu có
+        if 'final_result' in st.session_state: del st.session_state.final_result
+        
         try:
             try: df_train_org = pd.read_excel(uploaded_train, sheet_name='Bang tinh 5 tppt')
             except: df_train_org = pd.read_excel(uploaded_train, sheet_name=0)
             df_input_org = pd.read_excel(uploaded_input)
 
-            # Lấy timestamp hiện tại để ép hàm chạy lại
-            current_time = int(time.time())
-
-            with st.spinner(f"Đang tính toán lại (ID={current_time})..."):
-                # Truyền tham số current_time vào để 'lừa' hàm cache tính lại
-                df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, selected_seed, current_time)
+            # --- TẠO RA BIẾN run_id ĐỂ ĐẢM BẢO KHÔNG BỊ TRÙNG KẾT QUẢ CŨ ---
+            run_id = str(time.time()) 
+            with st.spinner(f"Đang tính toán lại (Run ID: {run_id[-4:]})..."):
+                df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, selected_seed)
                 
+                # Lưu kết quả mới vào Session State
+                st.session_state.final_result = df_final
+                
+                # Xử lý hiển thị
                 df_actual = df_train_org[['Năm', 'Tháng', 'Tổng thương phẩm']].copy()
                 df_final = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
                 df_final.rename(columns={'Tổng thương phẩm': 'Thuc_te'}, inplace=True)
