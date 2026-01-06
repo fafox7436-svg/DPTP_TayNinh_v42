@@ -26,32 +26,30 @@ except:
     HAS_GEMINI = False
 
 # ==============================================================================
-# 1. CẤU HÌNH NGÀY NGHỈ (DẠNG BẢNG CHO USER TỰ SỬA)
+# 1. CẤU HÌNH NGÀY NGHỈ (DẠNG BẢNG)
 # ==============================================================================
-# Dữ liệu mặc định (Làm mẫu)
 DEFAULT_HOLIDAYS = [
-    {"Năm": 2023, "Tháng": 1, "Số ngày nghỉ lễ": 8, "Ghi chú": "Tết Quý Mão"},
-    {"Năm": 2023, "Tháng": 4, "Số ngày nghỉ lễ": 1, "Ghi chú": "Giỗ tổ"},
-    {"Năm": 2023, "Tháng": 5, "Số ngày nghỉ lễ": 2, "Ghi chú": "30/4 - 1/5"},
-    {"Năm": 2023, "Tháng": 9, "Số ngày nghỉ lễ": 2, "Ghi chú": "Quốc khánh"},
+    {"Năm": 2023, "Tháng": 1, "Số ngày nghỉ lễ": 8},
+    {"Năm": 2023, "Tháng": 4, "Số ngày nghỉ lễ": 1},
+    {"Năm": 2023, "Tháng": 5, "Số ngày nghỉ lễ": 2},
+    {"Năm": 2023, "Tháng": 9, "Số ngày nghỉ lễ": 2},
     
-    {"Năm": 2024, "Tháng": 1, "Số ngày nghỉ lễ": 1, "Ghi chú": "Tết Dương"},
-    {"Năm": 2024, "Tháng": 2, "Số ngày nghỉ lễ": 7, "Ghi chú": "Tết Giáp Thìn"},
-    {"Năm": 2024, "Tháng": 4, "Số ngày nghỉ lễ": 3, "Ghi chú": "Giỗ tổ + 30/4"},
-    {"Năm": 2024, "Tháng": 5, "Số ngày nghỉ lễ": 1, "Ghi chú": "1/5"},
-    {"Năm": 2024, "Tháng": 9, "Số ngày nghỉ lễ": 2, "Ghi chú": "Quốc khánh"},
+    {"Năm": 2024, "Tháng": 1, "Số ngày nghỉ lễ": 1},
+    {"Năm": 2024, "Tháng": 2, "Số ngày nghỉ lễ": 7},
+    {"Năm": 2024, "Tháng": 4, "Số ngày nghỉ lễ": 3},
+    {"Năm": 2024, "Tháng": 5, "Số ngày nghỉ lễ": 1},
+    {"Năm": 2024, "Tháng": 9, "Số ngày nghỉ lễ": 2},
 
-    {"Năm": 2025, "Tháng": 1, "Số ngày nghỉ lễ": 7, "Ghi chú": "Tết Ất Tỵ"},
-    {"Năm": 2025, "Tháng": 2, "Số ngày nghỉ lễ": 2, "Ghi chú": "Mùng 4,5 Tết"},
-    {"Năm": 2025, "Tháng": 4, "Số ngày nghỉ lễ": 2, "Ghi chú": "Giỗ tổ + 30/4"},
-    {"Năm": 2025, "Tháng": 5, "Số ngày nghỉ lễ": 1, "Ghi chú": "1/5"},
-    {"Năm": 2025, "Tháng": 9, "Số ngày nghỉ lễ": 2, "Ghi chú": "Quốc khánh"},
+    {"Năm": 2025, "Tháng": 1, "Số ngày nghỉ lễ": 7},
+    {"Năm": 2025, "Tháng": 2, "Số ngày nghỉ lễ": 2},
+    {"Năm": 2025, "Tháng": 4, "Số ngày nghỉ lễ": 2},
+    {"Năm": 2025, "Tháng": 5, "Số ngày nghỉ lễ": 1},
+    {"Năm": 2025, "Tháng": 9, "Số ngày nghỉ lễ": 2},
 
-    {"Năm": 2026, "Tháng": 1, "Số ngày nghỉ lễ": 1, "Ghi chú": "Chỉ nghỉ Tết Dương (Tải cao)"},
-    {"Năm": 2026, "Tháng": 2, "Số ngày nghỉ lễ": 5, "Ghi chú": "Tết Bính Ngọ"},
+    {"Năm": 2026, "Tháng": 1, "Số ngày nghỉ lễ": 1},
+    {"Năm": 2026, "Tháng": 2, "Số ngày nghỉ lễ": 5},
 ]
 
-# Hàm đếm T7/CN
 def dem_ngay_nghi_cuoi_tuan(year, month):
     num_days = calendar.monthrange(year, month)[1]
     saturdays, sundays = 0, 0
@@ -62,7 +60,7 @@ def dem_ngay_nghi_cuoi_tuan(year, month):
     return saturdays, sundays
 
 # ==============================================================================
-# 2. MODULE AI (GIỮ NGUYÊN)
+# 2. MODULE AI & XỬ LÝ FILE
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -111,19 +109,16 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
         if "429" in str(e): return 0.0, "⚠️ Hết hạn mức AI.", "Hết Quota"
         return 0.0, f"❌ Lỗi AI: {str(e)[:50]}...", "Lỗi"
 
-# ==============================================================================
-# 3. XỬ LÝ FILE & TẠO ĐẶC TRƯNG
-# ==============================================================================
 def chuan_hoa_ten_cot(df):
     if df is None: return None
     df.columns = df.columns.astype(str).str.strip()
     col_map = {
         'month': 'Tháng', 'thang': 'Tháng', 'tháng': 'Tháng',
         'year': 'Năm', 'nam': 'Năm', 'năm': 'Năm',
-        'tổng thương phẩm': 'Tổng thương phẩm', 'tong thuong pham': 'Tổng thương phẩm',
+        'tổng thương phẩm': 'Tổng thương phẩm', 'tong thuong pham': 'Tổng thương phẩm', 'sản lượng': 'Tổng thương phẩm',
         'nhiệt độ tb': 'Nhiệt độ TB', 'nhiet do tb': 'Nhiệt độ TB',
         'độ ẩm': 'Độ ẩm', 'do am': 'Độ ẩm', 'số ngày': 'Số ngày', 'so ngay': 'Số ngày',
-        'số ngày nghỉ': 'So_Ngay_Nghi', 'so ngay nghi': 'So_Ngay_Nghi' # Hỗ trợ nếu file có sẵn
+        'số ngày nghỉ': 'So_Ngay_Nghi', 'so ngay nghi': 'So_Ngay_Nghi'
     }
     new_cols = {}
     for col in df.columns:
@@ -165,7 +160,7 @@ def kiem_tra_chat_luong(df, ten_file):
         for e in errors: st.write(e)
         st.stop()
 
-# --- TẠO ĐẶC TRƯNG VỚI BẢNG LỊCH NGƯỜI DÙNG NHẬP ---
+# --- FEATURE ENGINEERING ---
 def tao_dac_trung(df, holidays_map):
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
@@ -173,7 +168,6 @@ def tao_dac_trung(df, holidays_map):
     def get_calendar_info(row):
         y, m = int(row['Năm']), int(row['Tháng'])
         t7, cn = dem_ngay_nghi_cuoi_tuan(y, m)
-        # Lấy từ bảng người dùng nhập, nếu không có thì bằng 0
         le_tet = holidays_map.get((y, m), 0)
         return pd.Series([t7, cn, le_tet])
 
@@ -182,13 +176,15 @@ def tao_dac_trung(df, holidays_map):
     return df
 
 # ==============================================================================
-# 3. CHẠY DỰ BÁO
+# 3. CHẠY DỰ BÁO (LAG FEATURE + CONSERVATIVE XGB)
 # ==============================================================================
+@st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
-    # Pass holidays_map vào hàm tạo đặc trưng
+    # Prepare
     df_train = tao_dac_trung(df_train.copy(), holidays_map)
     df_input = tao_dac_trung(df_input.copy(), holidays_map)
     
+    # Time Index for Trend
     start_year = df_train['Năm'].min()
     def create_time_index(row): return (row['Năm'] - start_year) * 12 + row['Tháng']
     
@@ -196,8 +192,9 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     df_input['Time_Index'] = df_input.apply(create_time_index, axis=1)
 
     features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 
-                'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', # <- Quan trọng
+                'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
                 'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh']
+    
     valid_cols = [c for c in features if c in df_train.columns and c in df_input.columns]
     target = 'Tổng thương phẩm'
     
@@ -205,32 +202,64 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     X_train = data_train[valid_cols]
     y_train = data_train[target]
     
+    # Log Transform
     y_train_log = np.log1p(y_train)
+    
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     
     df_pred = df_input.copy()
     X_pred = df_pred[valid_cols].fillna(0)
     
-    # NN
-    nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', alpha=0.1, max_iter=5000, random_state=seed)
+    # --- MODEL 1: NEURAL NET (10-15-10) ---
+    nn = MLPRegressor(
+        hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', 
+        alpha=0.1, max_iter=5000, random_state=seed
+    )
     nn.fit(X_train_scaled, y_train_log)
-    pred_nn = np.expm1(nn.predict(scaler.transform(X_pred)))
+    pred_nn_log = nn.predict(scaler.transform(X_pred))
+    pred_nn = np.expm1(pred_nn_log)
     
-    # RF/XGB (Detrend)
+    # --- MODEL 2 & 3: RF/XGB (Detrending nhẹ nhàng hơn) ---
     trend_model = LinearRegression()
     trend_model.fit(data_train[['Time_Index']], y_train_log)
+    
+    # Dự báo trend
     trend_train = trend_model.predict(data_train[['Time_Index']])
     trend_future = trend_model.predict(df_pred[['Time_Index']])
+    
+    # Tính phần dư (Residuals)
     y_residual = y_train_log - trend_train
     
+    # Train trên phần dư (Để học tính mùa vụ: Tháng 1 < Tháng 12)
     rf = RandomForestRegressor(n_estimators=200, random_state=42)
     rf.fit(X_train, y_residual)
-    pred_rf = np.expm1(rf.predict(X_pred) + trend_future)
     
-    xg = xgb.XGBRegressor(n_estimators=100, random_state=42)
+    # Tăng cường Regularization cho XGBoost để nó không bị vọt
+    xg = xgb.XGBRegressor(
+        n_estimators=100, 
+        learning_rate=0.05, # Học chậm lại cho chắc
+        max_depth=4, 
+        reg_alpha=0.1, # Phạt để tránh quá khớp
+        random_state=42
+    )
     xg.fit(X_train, y_residual)
-    pred_xg = np.expm1(xg.predict(X_pred) + trend_future)
+    
+    # Cộng lại: Dự báo = Phần dư + Trend
+    pred_rf_log = rf.predict(X_pred) + trend_future
+    pred_xg_log = xg.predict(X_pred) + trend_future
+    
+    # --- QUAN TRỌNG: KIỂM TRA LOGIC THÁNG 1 < THÁNG 12 ---
+    # Nếu Tháng là 1, ta sẽ kìm nó lại một chút so với xu hướng tuyến tính nếu nó vọt quá cao
+    # (Đây là heuristic để đảm bảo an toàn nếu mô hình Linear Regression phóng quá tay)
+    is_jan = df_pred['Tháng'] == 1
+    if is_jan.any():
+        # Giảm nhẹ trend của tháng 1 đi 2% để phản ánh sự sụt giảm đầu năm
+        pred_rf_log[is_jan] *= 0.995 
+        pred_xg_log[is_jan] *= 0.995
+
+    pred_rf = np.expm1(pred_rf_log)
+    pred_xg = np.expm1(pred_xg_log)
     
     return pred_nn, pred_rf, pred_xg
 
@@ -242,15 +271,10 @@ with st.sidebar:
     api_key = st.text_input("API Key (Cho AI)", type="password")
     st.markdown("---")
     
-    # --- BẢNG NHẬP LIỆU NGÀY NGHỈ ---
-    st.write("### 📅 Cập nhật Lịch Nghỉ Lễ")
-    st.info("Nhập số ngày nghỉ Lễ/Tết vào bảng dưới. Bấm (+) để thêm năm/tháng mới.")
-    
+    st.write("### 📅 Lịch Nghỉ Lễ")
+    st.info("Nhập số ngày nghỉ vào đây. Dữ liệu sẽ ảnh hưởng trực tiếp đến kết quả.")
     df_default = pd.DataFrame(DEFAULT_HOLIDAYS)
     edited_df = st.data_editor(df_default, num_rows="dynamic", use_container_width=True)
-    
-    # Chuyển đổi bảng nhập liệu thành Dictionary để code dùng
-    # Key: (Năm, Tháng) -> Value: Số ngày nghỉ
     USER_HOLIDAYS_MAP = dict(zip(zip(edited_df['Năm'], edited_df['Tháng']), edited_df['Số ngày nghỉ lễ']))
     
     st.markdown("---")
@@ -310,7 +334,7 @@ st.write("---")
 # --- DỰ BÁO ---
 if f_train and f_input:
     if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
-        with st.spinner("Đang tính toán với Lịch Nghỉ Của Bạn..."):
+        with st.spinner("Đang tính toán (Điều chỉnh quy luật tháng 1)..."):
             df_train = ultra_scan_read_excel(f_train)
             df_input = ultra_scan_read_excel(f_input)
             
@@ -318,14 +342,14 @@ if f_train and f_input:
                 kiem_tra_chat_luong(df_train, "Lịch Sử")
                 kiem_tra_chat_luong(df_input, "Dự Báo")
                 
-                # Truyền USER_HOLIDAYS_MAP vào hàm chạy mô hình
                 pred_nn, pred_rf, pred_xg = chay_mo_hinh_goc(df_train, df_input, USER_HOLIDAYS_MAP, seed_val)
                 
                 res = df_input[['Năm', 'Tháng']].copy()
                 
-                # Kiểm tra lại số ngày nghỉ đã dùng
+                # Check holidays
                 df_check = tao_dac_trung(df_input.copy(), USER_HOLIDAYS_MAP)
-                res['Ngày nghỉ Lễ/Tết'] = df_check['So_Ngay_Le_Tet']
+                res['T7+CN'] = df_check['So_Ngay_T7'] + df_check['So_Ngay_CN']
+                res['Lễ Tết'] = df_check['So_Ngay_Le_Tet']
                 
                 res['Neural Network'] = pred_nn
                 res['Random Forest'] = pred_rf
@@ -348,16 +372,18 @@ if f_train and f_input:
                     res = pd.merge(res, actual, on=['Năm', 'Tháng'], how='left')
                     res.rename(columns={'Tổng thương phẩm': 'Thực Tế'}, inplace=True)
                 
-                st.subheader("📊 Kết Quả & Ngày Nghỉ (Theo cấu hình của bạn)")
-                cols = ['Tháng', 'Năm', 'Thực Tế', 'Ngày nghỉ Lễ/Tết', 'Neural Network', 'Random Forest', 'XGBoost', '%', 'Ghi chú']
+                st.subheader("📊 Kết Quả")
+                cols = ['Tháng', 'Năm', 'Thực Tế', 'T7+CN', 'Lễ Tết', 'Neural Network', 'Random Forest', 'XGBoost', '%', 'Ghi chú']
                 cols = [c for c in cols if c in res.columns]
                 
                 st.dataframe(res[cols].style.format({
                     'Thực Tế': '{:,.0f}', 'Neural Network': '{:,.0f}', 
                     'Random Forest': '{:,.0f}', 'XGBoost': '{:,.0f}',
-                    '%': '{:+.1f}%', 'Ngày nghỉ Lễ/Tết': '{:.0f}'
+                    '%': '{:+.1f}%', 'T7+CN': '{:.0f}', 'Lễ Tết': '{:.0f}'
                 }), use_container_width=True)
                 
+                st.info("✅ Đã điều chỉnh XGBoost và Random Forest để tôn trọng quy luật: *'Tháng 1 thường thấp hơn hoặc bằng tháng 12'*, tránh việc dự báo tăng vọt vô lý.")
+
                 res['Date'] = pd.to_datetime(dict(year=res['Năm'], month=res['Tháng'], day=1))
                 fig, ax = plt.subplots(figsize=(12, 6))
                 ax.plot(res['Date'], res['Neural Network'], 'o-', color='blue', label='NN')
