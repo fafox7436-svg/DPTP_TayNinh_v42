@@ -23,7 +23,7 @@ try:
 except: HAS_GEMINI = False
 
 # ==============================================================================
-# 1. MODULE AI & WEB (ĐÃ KHÔI PHỤC TÍNH NĂNG TỰ DÒ THÔNG MINH)
+# 1. MODULE AI "BẤT TỬ" (CƠ CHẾ TỰ DÒ FALLBACK)
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -41,6 +41,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
     text_data = input_data
     status = ""
     
+    # Xử lý Link
     if input_data.strip().startswith("http"):
         with st.spinner("Đang đọc link..."):
             extracted, msg = lay_noi_dung_tu_link(input_data)
@@ -52,51 +53,53 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
     try:
         genai.configure(api_key=api_key)
         
-        # --- THUẬT TOÁN TỰ DÒ MODEL THÔNG MINH ---
-        # Mặc định an toàn nhất hiện nay
-        best_model_name = "gemini-1.5-flash" 
-        try:
-            # Quét danh sách model mà API Key này được phép dùng
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    name = m.name.lower()
-                    # Ưu tiên số 1: Flash (Nhanh nhất)
-                    if "1.5-flash" in name:
-                        best_model_name = m.name
-                        break # Tìm thấy chân ái thì chốt luôn
-                    # Ưu tiên số 2: Pro 1.5
-                    elif "1.5-pro" in name:
-                        best_model_name = m.name
-                    # Ưu tiên số 3: Các bản cũ hơn
-                    elif "gemini-pro" in name and "1.5" not in best_model_name:
-                        best_model_name = m.name
-        except:
-            pass # Nếu lỗi lúc dò thì dùng mặc định
+        # DANH SÁCH CÁC MODEL ĐỂ THỬ (Ưu tiên từ Mới -> Cũ)
+        candidate_models = [
+            "gemini-1.5-flash", # Nhanh nhất
+            "gemini-1.5-pro",   # Thông minh nhất
+            "gemini-pro",       # Ổn định nhất (Legacy)
+            "gemini-1.0-pro"    # Bản cũ
+        ]
+        
+        selected_model = None
+        response = None
+        error_log = ""
 
-        # Khởi tạo model với cái tên tìm được
-        model = genai.GenerativeModel(best_model_name)
-        
-        prompt = (f"Đọc tin: '{text_data[:4000]}'. Xác định % tăng/giảm phụ tải điện. "
-                  "Trả về: SỐ | LÝ DO. Ví dụ: -1.5 | Giảm 1.5%")
-        res = model.generate_content(prompt).text.strip()
-        
+        # --- VÒNG LẶP THỬ MODEL ---
+        for model_name in candidate_models:
+            try:
+                model = genai.GenerativeModel(model_name)
+                prompt = (f"Đọc tin: '{text_data[:4000]}'. Xác định % tăng/giảm phụ tải điện. "
+                          "Trả về: SỐ | LÝ DO. Ví dụ: -1.5 | Giảm 1.5%")
+                response = model.generate_content(prompt)
+                selected_model = model_name # Nếu chạy được dòng này tức là model OK
+                break # Thoát vòng lặp ngay
+            except Exception as e:
+                error_log += f"{model_name} failed; "
+                continue # Thử cái tiếp theo
+
+        if not response:
+            return 0.0, f"❌ Tất cả model đều lỗi: {error_log}", ""
+
+        # Xử lý kết quả trả về
+        res = response.text.strip()
         if "|" in res:
             parts = res.split("|")
             val = float(parts[0].strip())
-            return val, f"{status}✅ Xong (Dùng {best_model_name})!", parts[1].strip()
-        
-        # Dự phòng trường hợp AI quên format
+            return val, f"{status}✅ Xong! (Dùng {selected_model})", parts[1].strip()
+            
         import re
         match = re.search(r'-?\d+(\.\d+)?', res)
         if match:
              val = float(match.group())
-             return val, f"{status}✅ Xong (AI tự bắt số)!", res
-             
-        return 0.0, "⚠️ Không rõ số.", ""
-    except Exception as e: return 0.0, f"❌ Lỗi: {e}", ""
+             return val, f"{status}✅ Xong (AI tự bắt số - {selected_model})!", res
+
+        return 0.0, f"⚠️ AI ({selected_model}) không trả về số.", ""
+        
+    except Exception as e: return 0.0, f"❌ Lỗi hệ thống: {e}", ""
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (CÁCH LY TUYỆT ĐỐI - KHÔNG SỢ NHỚ DAI)
+# 2. HÀM TÍNH TOÁN (CÁCH LY TUYỆT ĐỐI)
 # ==============================================================================
 def feature_engineering(df):
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
@@ -140,7 +143,7 @@ def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
     xgb_model = xgb.XGBRegressor(n_estimators=50, random_state=42, n_jobs=-1)
     xgb_model.fit(X, y)
 
-    # DỰ BÁO GỐC (BASELINE)
+    # DỰ BÁO BASELINE
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
@@ -171,7 +174,7 @@ st.write("---")
 if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 
 # --- PHẦN 1: GEMINI TÍNH % ---
-st.subheader("1️⃣ Phân Tích Tác Động (Gemini)")
+st.subheader("1️⃣ Phân Tích Tác Động (AI)")
 c1, c2 = st.columns([2, 1])
 if 'detected_months' not in st.session_state: st.session_state.detected_months = []
 
@@ -186,9 +189,9 @@ with c2:
         except: pass
     
     if st.button("Phân Tích Ngay"):
-        with st.spinner("AI đang tự dò model & đọc tin..."):
+        with st.spinner("Đang tìm model phù hợp & đọc tin..."):
             val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
-        if "Lỗi" in log: st.warning(log)
+        if "Lỗi" in log or "failed" in log: st.warning(log)
         else:
             st.success(log)
             st.session_state.temp_score = val
