@@ -162,7 +162,7 @@ def tao_dac_trung(df):
     return df
 
 # ==============================================================================
-# 3. CHẠY DỰ BÁO (NN GỐC + RF/XGB DETRENDING)
+# 3. CHẠY DỰ BÁO (LOGIC CHUẨN: SCALING + DETRENDING)
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, seed=42):
@@ -170,10 +170,8 @@ def chay_mo_hinh_goc(df_train, df_input, seed=42):
     df_train = tao_dac_trung(df_train.copy())
     df_input = tao_dac_trung(df_input.copy())
     
-    # Tạo Time Index liên tục để bắt xu hướng (Trend)
-    # Ví dụ: Tháng 1/2023 là 1, Tháng 1/2026 là 37
+    # Tạo Time Index để bắt xu hướng (Trend)
     start_year = df_train['Năm'].min()
-    
     def create_time_index(row):
         return (row['Năm'] - start_year) * 12 + row['Tháng']
     
@@ -189,51 +187,52 @@ def chay_mo_hinh_goc(df_train, df_input, seed=42):
     X_train = data_train[valid_cols]
     y_train = data_train[target]
     
-    # Scale dữ liệu cho NN
+    # --- QUAN TRỌNG: CHUYỂN ĐỔI ĐƠN VỊ VỀ TRIỆU kWh ---
+    # Việc này giúp cả Neural Net và Linear Regression (Trend) hoạt động chính xác
+    y_train_scaled = y_train / 1_000_000.0
+    
+    # Scale X cho NN
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    X_train_std = scaler.fit_transform(X_train)
     
     # Input Data
     df_pred = df_input.copy()
     X_pred = df_pred[valid_cols].fillna(0)
     
     # ---------------------------------------------------------
-    # MODEL 1: NEURAL NETWORK (CẤU TRÚC 10-15-10 GỐC)
+    # MODEL 1: NEURAL NETWORK (CẤU TRÚC 10-15-10 CHUẨN)
     # ---------------------------------------------------------
-    # Neural Net tự học được trend nên không cần xử lý nhiều
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), max_iter=10000, random_state=seed)
-    nn.fit(X_train_scaled, y_train)
-    pred_nn = nn.predict(scaler.transform(X_pred))
+    # Train trên dữ liệu đã chia 1 triệu
+    nn.fit(X_train_std, y_train_scaled)
+    pred_nn_scaled = nn.predict(scaler.transform(X_pred))
     
     # ---------------------------------------------------------
     # MODEL 2 & 3: RF & XGB (CÓ DETRENDING - BẮT XU HƯỚNG)
     # ---------------------------------------------------------
-    # Bước 1: Dùng Hồi quy tuyến tính để tìm Xu hướng tăng trưởng (Trend)
+    # B1: Tìm xu hướng trên dữ liệu đã chia 1 triệu
     trend_model = LinearRegression()
-    trend_model.fit(data_train[['Time_Index']], y_train)
+    trend_model.fit(data_train[['Time_Index']], y_train_scaled)
     
-    # Tính Trend cho quá khứ và tương lai
     trend_train = trend_model.predict(data_train[['Time_Index']])
-    trend_pred = trend_model.predict(df_pred[['Time_Index']])
+    trend_future = trend_model.predict(df_pred[['Time_Index']])
     
-    # Bước 2: Trừ Trend ra khỏi dữ liệu gốc (Chỉ còn lại dao động mùa vụ)
-    y_residual = y_train - trend_train
+    # B2: Trừ xu hướng (Chỉ còn dao động mùa vụ)
+    y_residual = y_train_scaled - trend_train
     
-    # Bước 3: Train RF và XGB trên phần dư (Residuals)
+    # B3: Train RF/XGB trên phần dư
     rf = RandomForestRegressor(n_estimators=200, random_state=42)
     rf.fit(X_train, y_residual)
     
     xg = xgb.XGBRegressor(n_estimators=100, random_state=42)
     xg.fit(X_train, y_residual)
     
-    # Bước 4: Dự báo phần dư + Cộng lại Trend
-    pred_residual_rf = rf.predict(X_pred)
-    pred_residual_xg = xg.predict(X_pred)
+    # B4: Dự báo = Phần dư + Xu hướng tương lai
+    pred_rf_scaled = rf.predict(X_pred) + trend_future
+    pred_xg_scaled = xg.predict(X_pred) + trend_future
     
-    pred_rf = pred_residual_rf + trend_pred
-    pred_xg = pred_residual_xg + trend_pred
-    
-    return pred_nn, pred_rf, pred_xg
+    # --- NHÂN NGƯỢC LẠI 1 TRIỆU ĐỂ TRẢ VỀ SỐ GỐC ---
+    return pred_nn_scaled * 1_000_000, pred_rf_scaled * 1_000_000, pred_xg_scaled * 1_000_000
 
 # ==============================================================================
 # GIAO DIỆN
@@ -309,7 +308,7 @@ st.write("---")
 # --- PHẦN 3: DỰ BÁO ---
 if f_train and f_input:
     if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
-        with st.spinner("Đang tính toán (NN 10-15-10 + RF/XGB Detrending)..."):
+        with st.spinner("Đang tính toán (Đã xử lý số lớn + Tách xu hướng)..."):
             # 1. Đọc file
             df_train = ultra_scan_read_excel(f_train)
             df_input = ultra_scan_read_excel(f_input)
@@ -319,21 +318,22 @@ if f_train and f_input:
                 kiem_tra_chat_luong(df_train, "Lịch Sử")
                 kiem_tra_chat_luong(df_input, "Dự Báo")
                 
-                # 3. Chạy mô hình
+                # 3. Chạy 3 mô hình riêng biệt
                 pred_nn, pred_rf, pred_xg = chay_mo_hinh_goc(df_train, df_input, seed_val)
                 
-                # 4. Tính toán kết quả
+                # 4. Tạo DataFrame kết quả
                 res = df_input[['Năm', 'Tháng']].copy()
-                res['Neural Net'] = pred_nn
+                res['Neural Network'] = pred_nn
                 res['Random Forest'] = pred_rf
                 res['XGBoost'] = pred_xg
 
-                # 5. Áp dụng điều chỉnh
+                # 5. Áp dụng điều chỉnh % cho TỪNG CỘT RIÊNG
                 def apply_adj(row):
                     param = st.session_state.param_dict.get((row['Năm'], row['Tháng']), (0.0, ""))
                     factor = 1.0 + (param[0] / 100.0)
                     
-                    nn_adj = row['Neural Net'] * factor
+                    # Nhân hệ số riêng
+                    nn_adj = row['Neural Network'] * factor
                     rf_adj = row['Random Forest'] * factor
                     xgb_adj = row['XGBoost'] * factor
                     
@@ -352,15 +352,15 @@ if f_train and f_input:
                     res = pd.merge(res, actual, on=['Năm', 'Tháng'], how='left')
                     res.rename(columns={'Tổng thương phẩm': 'Thực Tế'}, inplace=True)
                 
-                # --- HIỂN THỊ KẾT QUẢ ---
+                # --- HIỂN THỊ KẾT QUẢ TÁCH BẠCH ---
                 st.subheader("📊 Bảng Kết Quả Chi Tiết (Từng Phương Pháp)")
                 
                 cols_display = {
                     'Tháng': 'Tháng', 'Năm': 'Năm',
                     'Thực Tế': 'Thực Tế',
-                    'Neural Network': 'Neural Network (10-15-10)',
-                    'Random Forest': 'Random Forest (Có Trend)',
-                    'XGBoost': 'XGBoost (Có Trend)',
+                    'Neural Network': 'Neural Network',
+                    'Random Forest': 'Random Forest',
+                    'XGBoost': 'XGBoost',
                     'Tác Động %': 'Điều Chỉnh (%)',
                     'Ghi chú': 'Ghi Chú'
                 }
@@ -374,33 +374,24 @@ if f_train and f_input:
                 # Format số liệu
                 format_dict = {
                     'Thực Tế': '{:,.0f}', 
-                    'Neural Network (10-15-10)': '{:,.0f}',
-                    'Random Forest (Có Trend)': '{:,.0f}',
-                    'XGBoost (Có Trend)': '{:,.0f}'
+                    'Neural Network': '{:,.0f}',
+                    'Random Forest': '{:,.0f}',
+                    'XGBoost': '{:,.0f}'
                 }
                 
                 st.dataframe(df_show.style.format(format_dict), use_container_width=True)
                 
-                # --- GIẢI THÍCH SỰ KHÁC BIỆT ---
-                st.info("""
-                ℹ️ **Cập nhật Logic Mô Hình:**
-                
-                1.  **Neural Network (10-15-10):** Đã khôi phục cấu trúc chuẩn như bạn yêu cầu. Giỏi nắm bắt quy luật phức tạp.
-                2.  **Random Forest & XGBoost (Có Trend):** Đã được nâng cấp thêm tính năng **"Tách Xu Hướng" (Detrending)**. 
-                    * Trước đây: Năm 2026 sẽ bị tụt về mức trung bình quá khứ (400-500tr).
-                    * Bây giờ: Hệ thống tự động cộng thêm phần tăng trưởng hàng năm vào kết quả.
-                    👉 **Kết quả:** RF và XGB giờ đây sẽ ra con số **hợp lý hơn hẳn (600tr-700tr)**, không còn bị tụt dốc vô lý nữa.
-                """)
+                st.info("✅ **Đã xử lý:** Code tự động chuyển đổi đơn vị về 'Triệu kWh' để tính toán, sau đó nhân ngược lại. Điều này giúp các mô hình (đặc biệt là Neural Network và XGBoost) hoạt động ổn định và chính xác với con số lớn.")
 
                 # BIỂU ĐỒ 3 ĐƯỜNG RIÊNG BIỆT
-                st.subheader("📈 Biểu Đồ So Sánh")
+                st.subheader("📈 Biểu Đồ So Sánh 3 Phương Pháp")
                 res['Date'] = pd.to_datetime(dict(year=res['Năm'], month=res['Tháng'], day=1))
                 fig, ax = plt.subplots(figsize=(12, 6))
                 
                 # Vẽ 3 đường riêng biệt
-                ax.plot(res['Date'], res['Neural Network'], 'o-', color='blue', linewidth=2, label='Neural Net')
-                ax.plot(res['Date'], res['Random Forest'], 's--', color='green', linewidth=2, label='RF (Trend)')
-                ax.plot(res['Date'], res['XGBoost'], '^-.', color='purple', linewidth=2, label='XGB (Trend)')
+                ax.plot(res['Date'], res['Neural Network'], 'o-', color='blue', linewidth=2, label='Neural Network')
+                ax.plot(res['Date'], res['Random Forest'], 's--', color='green', linewidth=1.5, label='Random Forest (Có Trend)')
+                ax.plot(res['Date'], res['XGBoost'], '^-.', color='purple', linewidth=1.5, label='XGBoost (Có Trend)')
                 
                 if 'Thực Tế' in res.columns:
                     mask = res['Thực Tế'].notnull()
