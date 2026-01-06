@@ -13,18 +13,19 @@ from bs4 import BeautifulSoup
 import re
 
 # --- CẤU HÌNH ---
-st.set_page_config(page_title="Hệ Thống Dự Báo Phụ Tải", layout="wide")
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN")
+st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH")
 st.markdown("---")
 
-# --- KIỂM TRA THƯ VIỆN ---
+# --- KIỂM TRA THƯ VIỆN AI ---
 try:
     import google.generativeai as genai
     HAS_GEMINI = True
-except: HAS_GEMINI = False
+except: 
+    HAS_GEMINI = False
 
 # ==============================================================================
-# 1. MODULE AI (GIỮ NGUYÊN)
+# 1. MODULE AI & XỬ LÝ TEXT (SIÊU BỀN)
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -38,16 +39,19 @@ def lay_noi_dung_tu_link(url):
     except: return None, "⚠️ Lỗi đọc web."
 
 def trich_xuat_so(text):
+    # Dùng Regex để bắt số bất chấp văn bản (VD: "Tăng 5%" -> lấy 5.0)
     try:
         matches = re.findall(r'-?\d+(?:\.\d+)?', str(text))
         if matches:
             val = float(matches[0])
-            return max(min(val, 30.0), -30.0)
+            # Chặn số ảo quá lớn
+            return max(min(val, 50.0), -50.0)
         return 0.0
     except: return 0.0
 
 def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
-    if not api_key: return 0.0, "⚠️ Thiếu API Key.", ""
+    if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", ""
+    
     text_data = input_data
     status = ""
     if input_data.strip().startswith("http"):
@@ -61,8 +65,8 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
     try:
         genai.configure(api_key=api_key)
         
-        # Auto-detect model
-        found_model = "models/gemini-pro"
+        # Cơ chế "Vơ bèo gạt tép": Có model nào dùng model đó
+        found_model = "gemini-pro" # Mặc định
         try:
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods:
@@ -77,12 +81,14 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
         response = model.generate_content(prompt)
         res = response.text.strip()
         
+        # Ưu tiên 1: Lấy theo format chuẩn
         if "|" in res:
             parts = res.split("|")
             val = trich_xuat_so(parts[0]) 
             reason = parts[1].strip()
             return val, f"{status}✅ Xong! (Model: {found_model})", reason
             
+        # Ưu tiên 2: Tự tìm số trong văn bản
         val = trich_xuat_so(res)
         if val != 0.0:
              return val, f"{status}✅ Xong (Tự bắt số)!", res
@@ -91,46 +97,13 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
     except Exception as e: return 0.0, f"❌ Lỗi: {str(e)[:100]}", ""
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN & XỬ LÝ FILE THÔNG MINH
+# 2. XỬ LÝ FILE EXCEL (CHÌA KHÓA VẠN NĂNG)
 # ==============================================================================
-
-# --- HÀM MỚI: ĐỌC FILE THÔNG MINH (BỎ QUA DÒNG TIÊU ĐỀ THỪA) ---
-def smart_read_excel(uploaded_file):
-    """
-    Hàm này quét 10 dòng đầu để tìm xem dòng nào chứa chữ 'Năm' và 'Tháng'
-    để làm dòng tiêu đề chính thức.
-    """
-    try:
-        # Đọc thử 10 dòng đầu, không lấy header
-        df_preview = pd.read_excel(uploaded_file, header=None, nrows=10)
-        
-        header_row = 0
-        found = False
-        
-        # Quét từng dòng
-        for i, row in df_preview.iterrows():
-            row_str = row.astype(str).str.lower().tolist()
-            # Kiểm tra xem dòng này có chứa từ khóa quan trọng không
-            # Chấp nhận cả tiếng Việt và tiếng Anh
-            has_year = any(x in str(r) for r in row_str for x in ['năm', 'nam', 'year'])
-            has_month = any(x in str(r) for r in row_str for x in ['tháng', 'thang', 'month'])
-            
-            if has_year and has_month:
-                header_row = i
-                found = True
-                break
-        
-        # Reset con trỏ file về đầu để đọc lại từ dòng tìm được
-        uploaded_file.seek(0)
-        df = pd.read_excel(uploaded_file, header=header_row)
-        return df
-        
-    except Exception as e:
-        st.error(f"Lỗi đọc file: {e}")
-        return pd.DataFrame()
-
 def chuan_hoa_ten_cot(df):
-    df.columns = df.columns.str.strip()
+    """Đưa mọi tên cột về chuẩn: Năm, Tháng, Tổng thương phẩm"""
+    if df is None: return None
+    df.columns = df.columns.astype(str).str.strip()
+    
     col_map = {
         'month': 'Tháng', 'thang': 'Tháng', 'tháng': 'Tháng', 'Thang': 'Tháng',
         'year': 'Năm', 'nam': 'Năm', 'năm': 'Năm', 'Nam': 'Năm',
@@ -138,19 +111,38 @@ def chuan_hoa_ten_cot(df):
         'thuong pham': 'Tổng thương phẩm', 'sản lượng': 'Tổng thương phẩm',
         'san luong': 'Tổng thương phẩm', 'commercial': 'Tổng thương phẩm'
     }
+    
     new_cols = {}
     for col in df.columns:
-        col_lower = str(col).lower()
+        col_lower = col.lower()
         if col_lower in col_map:
             new_cols[col] = col_map[col_lower]
-    df = df.rename(columns=new_cols)
-    return df
+            
+    return df.rename(columns=new_cols)
 
+def read_user_file(uploaded_file, header_idx):
+    """Đọc file với dòng tiêu đề do người dùng chọn"""
+    try:
+        # Reset con trỏ file
+        uploaded_file.seek(0)
+        df = pd.read_excel(uploaded_file, header=header_idx)
+        df = chuan_hoa_ten_cot(df)
+        return df
+    except Exception as e:
+        return None
+
+# ==============================================================================
+# 3. TÍNH TOÁN DỰ BÁO (CÁCH LY TUYỆT ĐỐI)
+# ==============================================================================
 def feature_engineering(df):
-    if 'Tháng' not in df.columns or 'Năm' not in df.columns:
-        st.error(f"❌ Lỗi dữ liệu: Sau khi quét vẫn thiếu cột 'Tháng'/'Năm'. Cột hiện có: {list(df.columns)}")
+    if df is None: return None
+    
+    # Kiểm tra cột bắt buộc
+    required = ['Tháng', 'Năm']
+    if not all(col in df.columns for col in required):
+        st.error(f"❌ Thiếu cột 'Tháng' hoặc 'Năm'. Các cột hiện có: {list(df.columns)}")
         st.stop()
-        
+
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
     
@@ -158,13 +150,11 @@ def feature_engineering(df):
         try: return 1 if (row['Năm']==2025 and row['Tháng']==1) or (row['Năm']==2024 and row['Tháng']==2) else 0
         except: return 0
     df['Co_Tet'] = df.apply(check_tet, axis=1)
+    
     return df
 
-def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
-    # Chuẩn hóa tên cột
-    df_train = chuan_hoa_ten_cot(df_train_origin.copy())
-    df_input = chuan_hoa_ten_cot(df_input_origin.copy())
-
+def chay_mo_phong_sach(df_train, df_input, user_seed):
+    # Đảm bảo sạch 100%
     df_train['Bien_Ngoai_Sinh'] = 0
     df_input['Bien_Ngoai_Sinh'] = 0
 
@@ -176,7 +166,7 @@ def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
     target = 'Tổng thương phẩm'
     
     if target not in df_train.columns:
-        st.error("❌ Lỗi: Không tìm thấy cột 'Tổng thương phẩm' trong file Train.")
+        st.error("❌ Không tìm thấy cột 'Tổng thương phẩm' trong file Train.")
         st.stop()
 
     data_clean = df_train.dropna(subset=valid_features + [target]).copy()
@@ -186,15 +176,17 @@ def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # Models
+    # HUẤN LUYỆN 3 MÔ HÌNH
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=user_seed)
     nn.fit(X_scaled, y)
+    
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
     rf.fit(X, y)
+
     xgb_model = xgb.XGBRegressor(n_estimators=50, random_state=42, n_jobs=-1)
     xgb_model.fit(X, y)
 
-    # Predict
+    # DỰ BÁO
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
@@ -205,40 +197,45 @@ def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
     return df_pred[['Năm', 'Tháng', 'NN_Goc', 'RF_Goc', 'XGB_Goc']]
 
 # ==============================================================================
-# GIAO DIỆN
+# GIAO DIỆN NGƯỜI DÙNG
 # ==============================================================================
 with st.sidebar:
     st.header("⚙️ Cấu Hình")
-    api_key = st.text_input("API Key", type="password")
+    api_key = st.text_input("API Key (Tùy chọn)", type="password")
+    
+    st.markdown("---")
+    st.write("### 📂 Cấu hình File Excel")
+    # Cho phép chọn dòng tiêu đề để tránh lỗi
+    header_idx = st.number_input("Dòng tiêu đề (Header Row):", min_value=0, max_value=10, value=0, help="Dòng chứa chữ Năm, Tháng là dòng số mấy? (Bắt đầu từ 0)")
+    
     st.markdown("---")
     selected_seed = st.number_input("Random Seed", value=42)
     
-    if st.button("🗑️ XÓA CACHE"):
+    if st.button("🗑️ XÓA CACHE & LÀM MỚI"):
         st.cache_data.clear()
         st.rerun()
 
 col1, col2 = st.columns(2)
-with col1: uploaded_train = st.file_uploader("1. Dữ liệu Lịch sử", type=['xlsx', 'xls'])
-with col2: uploaded_input = st.file_uploader("2. Dữ liệu Dự báo", type=['xlsx', 'xls'])
+with col1: uploaded_train = st.file_uploader("1. Dữ liệu Lịch sử (Train)", type=['xlsx', 'xls'])
+with col2: uploaded_input = st.file_uploader("2. Dữ liệu Dự báo (Input)", type=['xlsx', 'xls'])
 
 st.write("---")
 if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 
-# --- PHẦN 1: AI ---
-st.subheader("1️⃣ Phân Tích Tác Động (AI)")
+# --- PHẦN 1: KỊCH BẢN (AI HOẶC TAY) ---
+st.subheader("1️⃣ Thiết Lập Kịch Bản (AI / Thủ Công)")
 c1, c2 = st.columns([2, 1])
 if 'detected_months' not in st.session_state: st.session_state.detected_months = []
 
 with c1: 
-    text_data = st.text_area("Nhập Link hoặc Tin tức:", height=80)
+    text_data = st.text_area("Nhập Link báo hoặc Tin tức:", height=80)
 
 with c2:
     if uploaded_input:
         try:
-            # SỬA LỖI: Dùng smart_read_excel để đọc file input cho AI
-            df_temp = smart_read_excel(uploaded_input)
-            df_temp = chuan_hoa_ten_cot(df_temp)
-            if 'Năm' in df_temp.columns and 'Tháng' in df_temp.columns:
+            # Đọc file để lấy tháng (dùng header user chọn)
+            df_temp = read_user_file(uploaded_input, header_idx)
+            if df_temp is not None and 'Năm' in df_temp.columns:
                 st.session_state.detected_months = sorted(list(set(zip(df_temp['Năm'], df_temp['Tháng']))))
         except: pass
     
@@ -249,13 +246,13 @@ with c2:
         if "Lỗi" in log: 
             st.warning(log)
             st.session_state.temp_score = 0.0
-            st.session_state.temp_reason = "Lỗi, nhập tay"
+            st.session_state.temp_reason = "Lỗi, hãy nhập tay"
         else:
             st.success(log)
             st.session_state.temp_score = val
             st.session_state.temp_reason = reason
 
-# --- PHẦN 2: THIẾT LẬP ---
+# --- PHẦN 2: CHỌN THÁNG & NHẬP SỐ ---
 if st.session_state.detected_months:
     c_a, c_b = st.columns(2)
     with c_a:
@@ -263,29 +260,37 @@ if st.session_state.detected_months:
         selected = st.multiselect("Chọn tháng áp dụng:", months_str, default=months_str)
     with c_b:
         cur_val = st.session_state.get('temp_score', 0.0)
-        final_pct = st.number_input("Mức Tăng/Giảm (%) - Cộng trừ bên ngoài:", value=float(cur_val), step=0.1)
+        final_pct = st.number_input("Mức Tăng/Giảm (%) - NHẬP SỐ Ở ĐÂY:", value=float(cur_val), step=0.1, format="%.2f")
     
     if st.button("💾 Lưu Kịch Bản"):
         temp = {}
         for s in selected:
             m = int(s.split('/')[0].replace('Tháng ', ''))
             y = int(s.split('/')[1])
-            temp[(y, m)] = (final_pct, st.session_state.get('temp_reason', ''))
+            temp[(y, m)] = (final_pct, st.session_state.get('temp_reason', 'Thủ công'))
         st.session_state.param_dict = temp
-        st.success("Đã lưu!")
+        st.success(f"Đã lưu: {final_pct}%")
 
 st.write("---")
 
 # --- PHẦN 3: CHẠY DỰ BÁO ---
 if uploaded_train and uploaded_input:
+    # Preview để user biết mình chọn đúng dòng tiêu đề chưa
+    st.caption(f"👀 Xem trước dữ liệu (Header Row = {header_idx}):")
+    df_preview = read_user_file(uploaded_train, header_idx)
+    if df_preview is not None:
+        st.dataframe(df_preview.head(2), use_container_width=True)
+
     if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
         with st.spinner("Đang chạy mô hình gốc..."):
-            # SỬA LỖI: Dùng smart_read_excel cho cả 2 file
-            df_train_raw = smart_read_excel(uploaded_train)
-            df_input_raw = smart_read_excel(uploaded_input)
+            # Đọc lại file chuẩn chỉnh
+            df_train_clean = read_user_file(uploaded_train, header_idx)
+            df_input_clean = read_user_file(uploaded_input, header_idx)
             
-            df_final = chay_mo_phong_sach(df_train_raw, df_input_raw, selected_seed)
+            # Chạy mô hình
+            df_final = chay_mo_phong_sach(df_train_clean, df_input_clean, selected_seed)
 
+        # HÀM CỘNG TRỪ (POST-PROCESSING)
         def apply_adjustment(row):
             param = st.session_state.param_dict.get((row['Năm'], row['Tháng']), (0.0, ""))
             pct = param[0]
@@ -300,10 +305,8 @@ if uploaded_train and uploaded_input:
         df_final['Gemini_Pct'] = adj_res[3]
         df_final['Lý_do'] = adj_res[4]
 
-        # Merge với thực tế (cũng phải đọc thông minh)
-        df_actual_raw = smart_read_excel(uploaded_train)
-        df_actual_raw = chuan_hoa_ten_cot(df_actual_raw)
-        
+        # Merge thực tế
+        df_actual_raw = read_user_file(uploaded_train, header_idx)
         if 'Tổng thương phẩm' in df_actual_raw.columns:
             df_actual = df_actual_raw[['Năm', 'Tháng', 'Tổng thương phẩm']]
             df_show = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
@@ -312,8 +315,8 @@ if uploaded_train and uploaded_input:
             df_show = df_final.copy()
             df_show['Thuc_te'] = np.nan
         
-        # HIỂN THỊ
-        st.subheader("📊 Bảng Kết Quả")
+        # HIỂN THỊ KẾT QUẢ
+        st.subheader("📊 Bảng Kết Quả Chi Tiết")
         cols = {'Tháng': 'Tháng', 'Thuc_te': 'Thực Tế', 'Gemini_Pct': '% Đ.Chỉnh',
                 'NN_Goc': 'NN Gốc', 'NN_Final': 'NN (Đã chỉnh)',
                 'RF_Goc': 'RF Gốc', 'RF_Final': 'RF (Đã chỉnh)',
@@ -329,14 +332,14 @@ if uploaded_train and uploaded_input:
             'XGB Gốc': '{:,.0f}', 'XGB (Đã chỉnh)': '{:,.0f}',
         }), use_container_width=True)
 
-        st.subheader("📈 Biểu Đồ")
+        st.subheader("📈 Biểu Đồ So Sánh")
         df_show['Date'] = pd.to_datetime(dict(year=df_show['Năm'], month=df_show['Tháng'], day=1))
         fig, ax = plt.subplots(figsize=(14,6))
         ax.plot(df_show['Date'], df_show['NN_Goc'], '--', color='gray', label='NN Gốc', alpha=0.5)
-        ax.plot(df_show['Date'], df_show['NN_Final'], 's-', color='red', label='NN Đã Chỉnh')
-        ax.plot(df_show['Date'], df_show['XGB_Final'], '^-', color='green', label='XGB Đã Chỉnh')
+        ax.plot(df_show['Date'], df_show['NN_Final'], 's-', color='red', label='NN Đã Chỉnh', linewidth=2)
+        ax.plot(df_show['Date'], df_show['XGB_Final'], '^-', color='green', label='XGB Đã Chỉnh', linewidth=2)
         if df_show['Thuc_te'].notnull().any():
-            ax.plot(df_show['Date'], df_show['Thuc_te'], 'o-', color='black', label='Thực tế')
+            ax.plot(df_show['Date'], df_show['Thuc_te'], 'o-', color='black', label='Thực tế', linewidth=3)
         ax.legend()
         ax.grid(True, alpha=0.3)
         st.pyplot(fig)
