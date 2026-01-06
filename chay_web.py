@@ -9,6 +9,7 @@ import xgboost as xgb
 import requests
 from bs4 import BeautifulSoup
 import re
+import time
 
 # --- CẤU HÌNH ---
 st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
@@ -23,7 +24,7 @@ except:
     HAS_GEMINI = False
 
 # ==============================================================================
-# 1. MODULE AI (GIỮ NGUYÊN)
+# 1. MODULE AI (GIỮ NGUYÊN TÍNH NĂNG MẠNH MẼ)
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -91,7 +92,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
         return 0.0, f"❌ Lỗi AI: {str(e)[:50]}...", "Lỗi"
 
 # ==============================================================================
-# 2. XỬ LÝ FILE (THÔNG MINH)
+# 2. XỬ LÝ FILE (CÓ KIỂM SOÁT LỖI NGHIÊM NGẶT)
 # ==============================================================================
 def chuan_hoa_ten_cot(df):
     if df is None: return None
@@ -126,6 +127,38 @@ def ultra_scan_read_excel(uploaded_file):
         return chuan_hoa_ten_cot(pd.read_excel(uploaded_file, header=0))
     except: return None
 
+def kiem_tra_chat_luong(df, ten_file):
+    """
+    KIỂM SOÁT NGHIÊM NGẶT: 
+    Nếu thấy ô trống hoặc bằng 0 ở cột quan trọng -> Báo lỗi và DỪNG CHẠY.
+    """
+    errors = []
+    required = ['Tháng', 'Năm']
+    for col in required:
+        if col not in df.columns:
+            st.error(f"❌ File {ten_file} thiếu cột '{col}'")
+            st.stop()
+            
+    # Các cột KHÔNG ĐƯỢC PHÉP bằng 0 hoặc Rỗng
+    check_cols = ['Nhiệt độ TB', 'Độ ẩm', 'Số ngày']
+    for col in check_cols:
+        if col in df.columns:
+            # 1. Check rỗng (NaN)
+            if df[col].isnull().any():
+                rows = df[df[col].isnull()].index + 2 # +2 để khớp dòng Excel
+                errors.append(f"❌ Cột '{col}' bị TRỐNG ở dòng: {rows.tolist()}")
+            
+            # 2. Check bằng 0 (Nhiệt độ/Độ ẩm không thể bằng 0)
+            if (df[col] == 0).any():
+                rows = df[df[col] == 0].index + 2
+                errors.append(f"❌ Cột '{col}' bằng 0 (Vô lý) ở dòng: {rows.tolist()}")
+                
+    if errors:
+        st.error(f"⚠️ Dữ liệu file {ten_file} không đạt chuẩn. Vui lòng sửa file Excel:")
+        for e in errors: st.write(e)
+        st.info("💡 Gợi ý: Hãy mở file Excel, điền đầy đủ số liệu vào các ô bị báo lỗi rồi upload lại.")
+        st.stop() # Dừng chương trình ngay lập tức
+
 def tao_dac_trung(df):
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
@@ -137,7 +170,7 @@ def tao_dac_trung(df):
     return df
 
 # ==============================================================================
-# 3. CHẠY DỰ BÁO (CÓ CACHE)
+# 3. CHẠY DỰ BÁO (CÓ CACHE ĐỂ TỐI ƯU TỐC ĐỘ)
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, seed=42):
@@ -157,11 +190,11 @@ def chay_mo_hinh_goc(df_train, df_input, seed=42):
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     
-    # --- MODEL 1: Neural Network ---
+    # --- MODEL 1: Neural Network (Thế mạnh: Bắt xu hướng tăng trưởng) ---
     nn = MLPRegressor(hidden_layer_sizes=(50, 50), max_iter=5000, random_state=seed)
     nn.fit(X_train_scaled, y_train)
     
-    # --- MODEL 2 & 3: RF & XGB ---
+    # --- MODEL 2 & 3: RF & XGB (Thế mạnh: Ổn định, nhưng bảo thủ) ---
     rf = RandomForestRegressor(n_estimators=200, random_state=42)
     rf.fit(X_train, y_train)
     
@@ -170,7 +203,7 @@ def chay_mo_hinh_goc(df_train, df_input, seed=42):
     
     # Predict
     df_pred = df_input.copy()
-    X_pred = df_pred[valid_cols].fillna(0)
+    X_pred = df_pred[valid_cols] # Dữ liệu phải sạch (đã check ở bước trên)
     
     pred_nn = nn.predict(scaler.transform(X_pred))
     pred_rf = rf.predict(X_pred)
@@ -186,15 +219,14 @@ with st.sidebar:
     api_key = st.text_input("API Key (Cho AI)", type="password")
     
     st.markdown("---")
-    st.write("### 🛠️ Điều chỉnh chung")
+    st.write("### 🛠️ Cài đặt chạy")
     seed_val = st.number_input("Random Seed (Mặc định 42)", value=42)
-    if st.button("🗑️ Xóa Cache (Reset App)"):
+    if st.button("🗑️ Xóa Cache (Chạy lại từ đầu)"):
         st.cache_data.clear()
         st.rerun()
 
 col1, col2 = st.columns(2)
 with col1: f_train = st.file_uploader("1. File Lịch Sử (Train)", type=['xlsx', 'xls'])
-# --- SỬA LỖI Ở ĐÂY (Thay c2 bằng col2) ---
 with col2: f_input = st.file_uploader("2. File Dự Báo (Input)", type=['xlsx', 'xls'])
 
 st.write("---")
@@ -259,67 +291,71 @@ if f_train and f_input:
             df_input = ultra_scan_read_excel(f_input)
             
             if df_train is not None and df_input is not None:
-                # 2. Chạy mô hình gốc
+                # 2. KIỂM TRA LỖI (Quan trọng)
+                kiem_tra_chat_luong(df_train, "Lịch Sử")
+                kiem_tra_chat_luong(df_input, "Dự Báo")
+                
+                # 3. Chạy mô hình
                 pred_nn, pred_rf, pred_xg = chay_mo_hinh_goc(df_train, df_input, seed_val)
                 
-                # 3. Tạo DataFrame kết quả
+                # 4. Tính toán kết quả
                 res = df_input[['Năm', 'Tháng']].copy()
-                res['NN_Goc'] = pred_nn
-                res['RF_Goc'] = pred_rf
-                res['XGB_Goc'] = pred_xg
+                res['Neural Net'] = pred_nn
+                res['Random Forest'] = pred_rf
+                res['XGBoost'] = pred_xg
 
-                # 4. Áp dụng điều chỉnh
+                # 5. Áp dụng điều chỉnh
                 def apply_adj(row):
                     param = st.session_state.param_dict.get((row['Năm'], row['Tháng']), (0.0, ""))
                     factor = 1.0 + (param[0] / 100.0)
                     
-                    nn_adj = row['NN_Goc'] * factor
-                    rf_adj = row['RF_Goc'] * factor
-                    xgb_adj = row['XGB_Goc'] * factor
+                    nn_adj = row['Neural Net'] * factor
+                    rf_adj = row['Random Forest'] * factor
+                    xgb_adj = row['XGBoost'] * factor
                     
                     # CÔNG THỨC CHỐT: Trung bình cộng
                     chot = (nn_adj + rf_adj + xgb_adj) / 3
                     return chot, nn_adj, rf_adj, xgb_adj, param[0], param[1]
 
                 adj_data = res.apply(apply_adj, axis=1, result_type='expand')
-                res['Dự Báo Chốt'] = adj_data[0]
-                res['NN'] = adj_data[1]
-                res['RF'] = adj_data[2]
-                res['XGB'] = adj_data[3]
+                res['Dự Báo Chính Thức'] = adj_data[0]
+                res['Neural Net'] = adj_data[1]
+                res['Random Forest'] = adj_data[2]
+                res['XGBoost'] = adj_data[3]
                 res['Tác Động %'] = adj_data[4]
-                res['Lý do'] = adj_data[5]
+                res['Ghi chú'] = adj_data[5]
 
-                # 5. Merge thực tế
+                # 6. Merge thực tế
                 if 'Tổng thương phẩm' in df_train.columns:
                     actual = df_train[['Năm', 'Tháng', 'Tổng thương phẩm']]
                     res = pd.merge(res, actual, on=['Năm', 'Tháng'], how='left')
                     res.rename(columns={'Tổng thương phẩm': 'Thực Tế'}, inplace=True)
                 
-                # --- HIỂN THỊ KẾT QUẢ DỄ HIỂU ---
+                # --- HIỂN THỊ KẾT QUẢ ---
                 st.subheader("📊 Bảng Kết Quả Dự Báo")
                 
-                cols_display = {
-                    'Tháng': 'Tháng', 'Năm': 'Năm',
-                    'Thực Tế': 'Thực Tế (Năm ngoái)',
-                    'Dự Báo Chốt': 'Dự Báo Chính Thức',
-                    'Tác Động %': 'Điều Chỉnh (%)',
-                    'Lý do': 'Ghi Chú'
-                }
+                # Chọn cột để hiển thị
+                cols_final = ['Năm', 'Tháng', 'Thực Tế', 'Dự Báo Chính Thức', 'Neural Net', 'Random Forest', 'XGBoost', 'Tác Động %', 'Ghi chú']
+                if 'Thực Tế' not in res.columns: cols_final.remove('Thực Tế')
                 
-                cols_to_use = [c for c in cols_display.keys() if c in res.columns]
-                df_show = res[cols_to_use].rename(columns=cols_display)
-                df_show['Điều Chỉnh (%)'] = df_show['Điều Chỉnh (%)'].apply(lambda x: f"{x:+.1f}%" if x!=0 else "-")
+                df_show = res[cols_final].copy()
+                df_show['Tác Động %'] = df_show['Tác Động %'].apply(lambda x: f"{x:+.1f}%" if x!=0 else "-")
                 
-                st.dataframe(df_show.style.format({
-                    'Thực Tế (Năm ngoái)': '{:,.0f}', 'Dự Báo Chính Thức': '{:,.0f}'
-                }), use_container_width=True)
+                # Format số
+                format_dict = {c: '{:,.0f}' for c in ['Thực Tế', 'Dự Báo Chính Thức', 'Neural Net', 'Random Forest', 'XGBoost'] if c in df_show.columns}
                 
-                # GIẢI THÍCH
+                st.dataframe(df_show.style.format(format_dict).background_gradient(subset=['Dự Báo Chính Thức'], cmap='Greens'), use_container_width=True)
+                
+                # --- GÓC GIẢI THÍCH (THEO YÊU CẦU CỦA BẠN) ---
                 st.info("""
-                ℹ️ **Giải thích:** Kết quả "Dự Báo Chính Thức" là trung bình của 3 mô hình (Neural Network + Random Forest + XGBoost).
-                * **Tại sao RF/XGB thấp hơn NN?** Do mô hình Cây (RF/XGB) có tính chất "an toàn", không dám dự báo cao hơn mức đỉnh lịch sử.
-                * **Neural Network (NN):** Thông minh hơn trong việc bắt xu hướng tăng trưởng của phụ tải.
-                👉 Hệ thống đã tự động cân bằng cả 3 để ra con số hợp lý nhất.
+                ℹ️ **Giải thích về sự chênh lệch:**
+                
+                * **Tại sao Random Forest & XGBoost lại thấp/giảm đột biến?** Hai mô hình này hoạt động dựa trên Cây Quyết Định (Decision Tree). Chúng có tính chất "bảo thủ", nghĩa là chúng **không dám dự báo** những con số cao hơn mức đỉnh lịch sử mà chúng từng thấy (gọi là không có khả năng ngoại suy - extrapolation). Nếu phụ tải năm nay tăng trưởng mạnh vượt đỉnh cũ, hai mô hình này sẽ có xu hướng dự báo đi ngang hoặc thấp hơn.
+                  
+                * **Tại sao Neural Network cao hơn?**
+                  Mạng Nơ-ron (Neural Network) hoạt động giống bộ não, có khả năng học được "xu hướng tăng trưởng" theo thời gian. Do đó, nó thường đưa ra dự báo sát với đà tăng trưởng thực tế hơn.
+                  
+                👉 **Kết luận:** Kết quả **"Dự Báo Chính Thức"** đã được tính bằng trung bình cộng của cả 3 mô hình để đảm bảo sự cân bằng và an toàn nhất.
                 """)
 
                 # BIỂU ĐỒ
@@ -327,13 +363,14 @@ if f_train and f_input:
                 res['Date'] = pd.to_datetime(dict(year=res['Năm'], month=res['Tháng'], day=1))
                 fig, ax = plt.subplots(figsize=(12, 6))
                 
-                ax.plot(res['Date'], res['Dự Báo Chốt'], 'o-', color='#d62728', linewidth=3, label='DỰ BÁO CHÍNH THỨC')
-                ax.plot(res['Date'], res['NN'], '--', color='blue', alpha=0.3, label='Neural Network (Xu hướng tăng)')
-                ax.plot(res['Date'], res['RF'], '--', color='green', alpha=0.3, label='Random Forest (Bảo thủ)')
+                ax.plot(res['Date'], res['Dự Báo Chính Thức'], 'o-', color='#d62728', linewidth=3, label='CHÍNH THỨC (Trung bình)')
+                ax.plot(res['Date'], res['Neural Net'], '--', color='blue', alpha=0.4, label='Neural Net (Xu hướng tăng)')
+                ax.plot(res['Date'], res['Random Forest'], '--', color='green', alpha=0.4, label='Random Forest (Bảo thủ)')
+                ax.plot(res['Date'], res['XGBoost'], '-.', color='purple', alpha=0.4, label='XGBoost (Bảo thủ)')
                 
                 if 'Thực Tế' in res.columns:
                     mask = res['Thực Tế'].notnull()
-                    ax.plot(res.loc[mask, 'Date'], res.loc[mask, 'Thực Tế'], 'ko', label='Thực Tế')
+                    ax.plot(res.loc[mask, 'Date'], res.loc[mask, 'Thực Tế'], 'ko', label='Thực Tế', zorder=10)
                     
                 ax.legend()
                 ax.grid(True, alpha=0.3)
