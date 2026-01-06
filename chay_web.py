@@ -137,7 +137,7 @@ def tao_dac_trung(df):
     return df
 
 # ==============================================================================
-# 3. CHẠY DỰ BÁO (CÓ CACHE - KHÔNG BỊ LOAD LẠI)
+# 3. CHẠY DỰ BÁO (CÓ CACHE)
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, seed=42):
@@ -157,12 +157,11 @@ def chay_mo_hinh_goc(df_train, df_input, seed=42):
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     
-    # --- MODEL 1: Neural Network (Giỏi bắt xu hướng tăng) ---
+    # --- MODEL 1: Neural Network ---
     nn = MLPRegressor(hidden_layer_sizes=(50, 50), max_iter=5000, random_state=seed)
     nn.fit(X_train_scaled, y_train)
     
-    # --- MODEL 2 & 3: RF & XGB (An toàn, bảo thủ) ---
-    # Lưu ý: 2 ông này không bao giờ dự báo cao hơn Max của quá khứ (đó là bản chất thuật toán)
+    # --- MODEL 2 & 3: RF & XGB ---
     rf = RandomForestRegressor(n_estimators=200, random_state=42)
     rf.fit(X_train, y_train)
     
@@ -195,12 +194,13 @@ with st.sidebar:
 
 col1, col2 = st.columns(2)
 with col1: f_train = st.file_uploader("1. File Lịch Sử (Train)", type=['xlsx', 'xls'])
-with c2: f_input = st.file_uploader("2. File Dự Báo (Input)", type=['xlsx', 'xls'])
+# --- SỬA LỖI Ở ĐÂY (Thay c2 bằng col2) ---
+with col2: f_input = st.file_uploader("2. File Dự Báo (Input)", type=['xlsx', 'xls'])
 
 st.write("---")
 if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 
-# --- PHẦN 1: AI (CÓ LẠI TÍNH NĂNG AI) ---
+# --- PHẦN 1: AI ---
 st.subheader("1️⃣ Phân Tích Thông Tin (AI / Thủ Công)")
 c1, c2 = st.columns([2, 1])
 if 'detected_months' not in st.session_state: st.session_state.detected_months = []
@@ -268,20 +268,17 @@ if f_train and f_input:
                 res['RF_Goc'] = pred_rf
                 res['XGB_Goc'] = pred_xg
 
-                # 4. Áp dụng điều chỉnh từ Kịch bản (Cộng trừ bên ngoài)
+                # 4. Áp dụng điều chỉnh
                 def apply_adj(row):
                     param = st.session_state.param_dict.get((row['Năm'], row['Tháng']), (0.0, ""))
                     factor = 1.0 + (param[0] / 100.0)
                     
-                    # Tính toán sau điều chỉnh
                     nn_adj = row['NN_Goc'] * factor
                     rf_adj = row['RF_Goc'] * factor
                     xgb_adj = row['XGB_Goc'] * factor
                     
-                    # CÔNG THỨC "DỰ BÁO CHỐT"
-                    # Lấy trung bình cộng (NN + RF + XGB) / 3
+                    # CÔNG THỨC CHỐT: Trung bình cộng
                     chot = (nn_adj + rf_adj + xgb_adj) / 3
-                    
                     return chot, nn_adj, rf_adj, xgb_adj, param[0], param[1]
 
                 adj_data = res.apply(apply_adj, axis=1, result_type='expand')
@@ -301,49 +298,36 @@ if f_train and f_input:
                 # --- HIỂN THỊ KẾT QUẢ DỄ HIỂU ---
                 st.subheader("📊 Bảng Kết Quả Dự Báo")
                 
-                # Tạo bảng hiển thị thân thiện
                 cols_display = {
-                    'Tháng': 'Tháng',
-                    'Năm': 'Năm',
-                    'Thực Tế': 'Thực Tế (Năm ngoái)', # Tự hiểu là so sánh với lịch sử nếu có
+                    'Tháng': 'Tháng', 'Năm': 'Năm',
+                    'Thực Tế': 'Thực Tế (Năm ngoái)',
                     'Dự Báo Chốt': 'Dự Báo Chính Thức',
                     'Tác Động %': 'Điều Chỉnh (%)',
                     'Lý do': 'Ghi Chú'
                 }
                 
-                # Chỉ lấy các cột có trong res
                 cols_to_use = [c for c in cols_display.keys() if c in res.columns]
-                
                 df_show = res[cols_to_use].rename(columns=cols_display)
-                
-                # Format % cho đẹp
                 df_show['Điều Chỉnh (%)'] = df_show['Điều Chỉnh (%)'].apply(lambda x: f"{x:+.1f}%" if x!=0 else "-")
                 
                 st.dataframe(df_show.style.format({
-                    'Thực Tế (Năm ngoái)': '{:,.0f}',
-                    'Dự Báo Chính Thức': '{:,.0f}'
+                    'Thực Tế (Năm ngoái)': '{:,.0f}', 'Dự Báo Chính Thức': '{:,.0f}'
                 }), use_container_width=True)
                 
-                # --- GIẢI THÍCH VỤ RF/XGB ---
+                # GIẢI THÍCH
                 st.info("""
-                ℹ️ **Giải thích kỹ thuật:** Kết quả "Dự Báo Chính Thức" là trung bình của 3 mô hình (Neural Network + Random Forest + XGBoost).
-                
-                **Tại sao RF/XGB thấp hơn NN?**
-                * **Random Forest (RF) & XGBoost (XGB):** Là các mô hình "an toàn". Nếu sản lượng năm nay tăng cao kỷ lục (vượt quá mọi năm trước), 2 mô hình này thường **không dám dự báo cao hơn** mức đỉnh cũ, dẫn đến kết quả bị thấp.
-                * **Neural Network (NN):** Thông minh hơn trong việc bắt xu hướng tăng trưởng ("học" được là năm sau cao hơn năm trước), nên thường cho kết quả cao hơn và sát thực tế tăng trưởng hơn.
-                
-                👉 Hệ thống đã tự động dung hòa cả 3 để đưa ra con số cân bằng nhất.
+                ℹ️ **Giải thích:** Kết quả "Dự Báo Chính Thức" là trung bình của 3 mô hình (Neural Network + Random Forest + XGBoost).
+                * **Tại sao RF/XGB thấp hơn NN?** Do mô hình Cây (RF/XGB) có tính chất "an toàn", không dám dự báo cao hơn mức đỉnh lịch sử.
+                * **Neural Network (NN):** Thông minh hơn trong việc bắt xu hướng tăng trưởng của phụ tải.
+                👉 Hệ thống đã tự động cân bằng cả 3 để ra con số hợp lý nhất.
                 """)
 
-                # Biểu đồ
+                # BIỂU ĐỒ
                 st.subheader("📈 Biểu Đồ So Sánh")
                 res['Date'] = pd.to_datetime(dict(year=res['Năm'], month=res['Tháng'], day=1))
                 fig, ax = plt.subplots(figsize=(12, 6))
                 
-                # Vẽ đường chính
                 ax.plot(res['Date'], res['Dự Báo Chốt'], 'o-', color='#d62728', linewidth=3, label='DỰ BÁO CHÍNH THỨC')
-                
-                # Vẽ mờ các đường thành phần (để user kiểm chứng lời giải thích)
                 ax.plot(res['Date'], res['NN'], '--', color='blue', alpha=0.3, label='Neural Network (Xu hướng tăng)')
                 ax.plot(res['Date'], res['RF'], '--', color='green', alpha=0.3, label='Random Forest (Bảo thủ)')
                 
