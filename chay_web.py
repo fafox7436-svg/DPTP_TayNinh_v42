@@ -25,7 +25,7 @@ except:
     HAS_GEMINI = False
 
 # ==============================================================================
-# 1. MODULE AI & XỬ LÝ TEXT (SIÊU BỀN)
+# 1. MODULE AI (GIỮ NGUYÊN)
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -39,18 +39,16 @@ def lay_noi_dung_tu_link(url):
     except: return None, "⚠️ Lỗi đọc web."
 
 def trich_xuat_so(text):
-    # Dùng Regex để bắt số bất chấp văn bản (VD: "Tăng 5%" -> lấy 5.0)
     try:
         matches = re.findall(r'-?\d+(?:\.\d+)?', str(text))
         if matches:
             val = float(matches[0])
-            # Chặn số ảo quá lớn
             return max(min(val, 50.0), -50.0)
         return 0.0
     except: return 0.0
 
 def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
-    if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", ""
+    if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", "Thủ công"
     
     text_data = input_data
     status = ""
@@ -64,9 +62,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
 
     try:
         genai.configure(api_key=api_key)
-        
-        # Cơ chế "Vơ bèo gạt tép": Có model nào dùng model đó
-        found_model = "gemini-pro" # Mặc định
+        found_model = "gemini-1.5-flash"
         try:
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods:
@@ -81,80 +77,100 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
         response = model.generate_content(prompt)
         res = response.text.strip()
         
-        # Ưu tiên 1: Lấy theo format chuẩn
         if "|" in res:
             parts = res.split("|")
             val = trich_xuat_so(parts[0]) 
             reason = parts[1].strip()
-            return val, f"{status}✅ Xong! (Model: {found_model})", reason
+            return val, f"{status}✅ Xong! (AI: {found_model})", reason
             
-        # Ưu tiên 2: Tự tìm số trong văn bản
         val = trich_xuat_so(res)
         if val != 0.0:
              return val, f"{status}✅ Xong (Tự bắt số)!", res
 
-        return 0.0, f"⚠️ AI chạy OK nhưng không ra số.", ""
-    except Exception as e: return 0.0, f"❌ Lỗi: {str(e)[:100]}", ""
+        return 0.0, f"⚠️ AI không tìm thấy số liệu.", ""
+        
+    except Exception as e:
+        if "429" in str(e) or "quota" in str(e).lower():
+            return 0.0, "⚠️ API Key hết hạn mức (Lỗi 429). Nhập tay nhé.", "Hết Quota"
+        return 0.0, f"❌ Lỗi AI: {str(e)[:50]}...", "Lỗi"
 
 # ==============================================================================
-# 2. XỬ LÝ FILE EXCEL (CHÌA KHÓA VẠN NĂNG)
+# 2. XỬ LÝ FILE EXCEL: SIÊU QUÉT (ULTRA SCAN)
 # ==============================================================================
 def chuan_hoa_ten_cot(df):
-    """Đưa mọi tên cột về chuẩn: Năm, Tháng, Tổng thương phẩm"""
     if df is None: return None
     df.columns = df.columns.astype(str).str.strip()
-    
     col_map = {
         'month': 'Tháng', 'thang': 'Tháng', 'tháng': 'Tháng', 'Thang': 'Tháng',
         'year': 'Năm', 'nam': 'Năm', 'năm': 'Năm', 'Nam': 'Năm',
         'tổng thương phẩm': 'Tổng thương phẩm', 'tong thuong pham': 'Tổng thương phẩm',
-        'thuong pham': 'Tổng thương phẩm', 'sản lượng': 'Tổng thương phẩm',
-        'san luong': 'Tổng thương phẩm', 'commercial': 'Tổng thương phẩm'
+        'thuong pham': 'Tổng thương phẩm', 'sản lượng': 'Tổng thương phẩm'
     }
-    
     new_cols = {}
     for col in df.columns:
         col_lower = col.lower()
         if col_lower in col_map:
             new_cols[col] = col_map[col_lower]
-            
     return df.rename(columns=new_cols)
 
-def read_user_file(uploaded_file, header_idx):
-    """Đọc file với dòng tiêu đề do người dùng chọn"""
+def ultra_scan_read_excel(uploaded_file):
+    """
+    Hàm này mở từng Sheet, quét từng dòng để tìm bảng dữ liệu chuẩn nhất.
+    Tiêu chí chuẩn: Phải có cả cột 'Tháng' và 'Năm'.
+    """
     try:
-        # Reset con trỏ file
+        xl = pd.ExcelFile(uploaded_file)
+        
+        # Duyệt qua từng Sheet
+        for sheet_name in xl.sheet_names:
+            # Đọc thử 10 dòng đầu của Sheet đó
+            df_preview = pd.read_excel(uploaded_file, sheet_name=sheet_name, header=None, nrows=10)
+            
+            # Quét từng dòng xem dòng nào là Header
+            for i, row in df_preview.iterrows():
+                row_str = row.astype(str).str.lower().tolist()
+                
+                # Kiểm tra xem dòng này có chứa cả 'tháng' và 'năm' không
+                has_month = any(x in str(r) for r in row_str for x in ['tháng', 'thang', 'month'])
+                has_year = any(x in str(r) for r in row_str for x in ['năm', 'nam', 'year'])
+                
+                if has_month and has_year:
+                    # BINGO! Tìm thấy rồi
+                    # Đọc lại Sheet này, bắt đầu từ dòng i
+                    uploaded_file.seek(0)
+                    df_final = pd.read_excel(uploaded_file, sheet_name=sheet_name, header=i)
+                    df_final = chuan_hoa_ten_cot(df_final)
+                    st.toast(f"✅ Đã tìm thấy dữ liệu chuẩn ở Sheet: '{sheet_name}' (Dòng {i})", icon="🎉")
+                    return df_final
+                    
+        # Nếu quét hết tất cả các sheet mà không thấy -> Thử đọc Sheet đầu tiên theo cách cũ
+        st.warning("⚠️ Không tìm thấy Sheet nào có đủ cột 'Tháng' và 'Năm'. Đang thử đọc Sheet đầu tiên...")
         uploaded_file.seek(0)
-        df = pd.read_excel(uploaded_file, header=header_idx)
-        df = chuan_hoa_ten_cot(df)
-        return df
+        return chuan_hoa_ten_cot(pd.read_excel(uploaded_file, header=0))
+        
     except Exception as e:
+        st.error(f"❌ Lỗi đọc file: {e}")
         return None
 
 # ==============================================================================
-# 3. TÍNH TOÁN DỰ BÁO (CÁCH LY TUYỆT ĐỐI)
+# 3. TÍNH TOÁN DỰ BÁO
 # ==============================================================================
 def feature_engineering(df):
     if df is None: return None
-    
-    # Kiểm tra cột bắt buộc
     required = ['Tháng', 'Năm']
     if not all(col in df.columns for col in required):
-        st.error(f"❌ Thiếu cột 'Tháng' hoặc 'Năm'. Các cột hiện có: {list(df.columns)}")
+        st.error(f"❌ Dữ liệu thiếu cột 'Tháng' hoặc 'Năm'. Code đã cố gắng quét nhưng không thấy.")
         st.stop()
 
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
-    
     def check_tet(row):
         try: return 1 if (row['Năm']==2025 and row['Tháng']==1) or (row['Năm']==2024 and row['Tháng']==2) else 0
         except: return 0
     df['Co_Tet'] = df.apply(check_tet, axis=1)
-    
     return df
 
 def chay_mo_phong_sach(df_train, df_input, user_seed):
-    # Đảm bảo sạch 100%
     df_train['Bien_Ngoai_Sinh'] = 0
     df_input['Bien_Ngoai_Sinh'] = 0
 
@@ -176,7 +192,6 @@ def chay_mo_phong_sach(df_train, df_input, user_seed):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # HUẤN LUYỆN 3 MÔ HÌNH
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=user_seed)
     nn.fit(X_scaled, y)
     
@@ -186,7 +201,6 @@ def chay_mo_phong_sach(df_train, df_input, user_seed):
     xgb_model = xgb.XGBRegressor(n_estimators=50, random_state=42, n_jobs=-1)
     xgb_model.fit(X, y)
 
-    # DỰ BÁO
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
@@ -197,21 +211,15 @@ def chay_mo_phong_sach(df_train, df_input, user_seed):
     return df_pred[['Năm', 'Tháng', 'NN_Goc', 'RF_Goc', 'XGB_Goc']]
 
 # ==============================================================================
-# GIAO DIỆN NGƯỜI DÙNG
+# GIAO DIỆN
 # ==============================================================================
 with st.sidebar:
     st.header("⚙️ Cấu Hình")
     api_key = st.text_input("API Key (Tùy chọn)", type="password")
-    
-    st.markdown("---")
-    st.write("### 📂 Cấu hình File Excel")
-    # Cho phép chọn dòng tiêu đề để tránh lỗi
-    header_idx = st.number_input("Dòng tiêu đề (Header Row):", min_value=0, max_value=10, value=0, help="Dòng chứa chữ Năm, Tháng là dòng số mấy? (Bắt đầu từ 0)")
-    
     st.markdown("---")
     selected_seed = st.number_input("Random Seed", value=42)
     
-    if st.button("🗑️ XÓA CACHE & LÀM MỚI"):
+    if st.button("🗑️ XÓA CACHE"):
         st.cache_data.clear()
         st.rerun()
 
@@ -222,7 +230,7 @@ with col2: uploaded_input = st.file_uploader("2. Dữ liệu Dự báo (Input)",
 st.write("---")
 if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 
-# --- PHẦN 1: KỊCH BẢN (AI HOẶC TAY) ---
+# --- PHẦN 1: KỊCH BẢN ---
 st.subheader("1️⃣ Thiết Lập Kịch Bản (AI / Thủ Công)")
 c1, c2 = st.columns([2, 1])
 if 'detected_months' not in st.session_state: st.session_state.detected_months = []
@@ -233,8 +241,8 @@ with c1:
 with c2:
     if uploaded_input:
         try:
-            # Đọc file để lấy tháng (dùng header user chọn)
-            df_temp = read_user_file(uploaded_input, header_idx)
+            # Dùng Ultra Scan để đọc file input
+            df_temp = ultra_scan_read_excel(uploaded_input)
             if df_temp is not None and 'Năm' in df_temp.columns:
                 st.session_state.detected_months = sorted(list(set(zip(df_temp['Năm'], df_temp['Tháng']))))
         except: pass
@@ -243,16 +251,16 @@ with c2:
         with st.spinner("Đang xử lý..."):
             val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
         
-        if "Lỗi" in log: 
+        if "Lỗi" in log or "429" in log: 
             st.warning(log)
             st.session_state.temp_score = 0.0
-            st.session_state.temp_reason = "Lỗi, hãy nhập tay"
+            st.session_state.temp_reason = "Lỗi/Hết Quota"
         else:
             st.success(log)
             st.session_state.temp_score = val
             st.session_state.temp_reason = reason
 
-# --- PHẦN 2: CHỌN THÁNG & NHẬP SỐ ---
+# --- PHẦN 2: CHỌN THÁNG ---
 if st.session_state.detected_months:
     c_a, c_b = st.columns(2)
     with c_a:
@@ -260,7 +268,7 @@ if st.session_state.detected_months:
         selected = st.multiselect("Chọn tháng áp dụng:", months_str, default=months_str)
     with c_b:
         cur_val = st.session_state.get('temp_score', 0.0)
-        final_pct = st.number_input("Mức Tăng/Giảm (%) - NHẬP SỐ Ở ĐÂY:", value=float(cur_val), step=0.1, format="%.2f")
+        final_pct = st.number_input("Mức Tăng/Giảm (%) - NHẬP SỐ TẠI ĐÂY:", value=float(cur_val), step=0.1, format="%.2f")
     
     if st.button("💾 Lưu Kịch Bản"):
         temp = {}
@@ -273,24 +281,21 @@ if st.session_state.detected_months:
 
 st.write("---")
 
-# --- PHẦN 3: CHẠY DỰ BÁO ---
+# --- PHẦN 3: DỰ BÁO ---
 if uploaded_train and uploaded_input:
-    # Preview để user biết mình chọn đúng dòng tiêu đề chưa
-    st.caption(f"👀 Xem trước dữ liệu (Header Row = {header_idx}):")
-    df_preview = read_user_file(uploaded_train, header_idx)
+    # Hiển thị preview dữ liệu đã quét được
+    df_preview = ultra_scan_read_excel(uploaded_train)
     if df_preview is not None:
-        st.dataframe(df_preview.head(2), use_container_width=True)
+        st.caption(f"👀 Dữ liệu đã quét được (5 dòng đầu):")
+        st.dataframe(df_preview.head(5), use_container_width=True)
 
     if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
-        with st.spinner("Đang chạy mô hình gốc..."):
-            # Đọc lại file chuẩn chỉnh
-            df_train_clean = read_user_file(uploaded_train, header_idx)
-            df_input_clean = read_user_file(uploaded_input, header_idx)
-            
-            # Chạy mô hình
+        with st.spinner("Đang chạy mô hình..."):
+            # Dùng Ultra Scan cho cả 2 file
+            df_train_clean = ultra_scan_read_excel(uploaded_train)
+            df_input_clean = ultra_scan_read_excel(uploaded_input)
             df_final = chay_mo_phong_sach(df_train_clean, df_input_clean, selected_seed)
 
-        # HÀM CỘNG TRỪ (POST-PROCESSING)
         def apply_adjustment(row):
             param = st.session_state.param_dict.get((row['Năm'], row['Tháng']), (0.0, ""))
             pct = param[0]
@@ -305,8 +310,8 @@ if uploaded_train and uploaded_input:
         df_final['Gemini_Pct'] = adj_res[3]
         df_final['Lý_do'] = adj_res[4]
 
-        # Merge thực tế
-        df_actual_raw = read_user_file(uploaded_train, header_idx)
+        # Merge
+        df_actual_raw = ultra_scan_read_excel(uploaded_train)
         if 'Tổng thương phẩm' in df_actual_raw.columns:
             df_actual = df_actual_raw[['Năm', 'Tháng', 'Tổng thương phẩm']]
             df_show = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
@@ -315,8 +320,8 @@ if uploaded_train and uploaded_input:
             df_show = df_final.copy()
             df_show['Thuc_te'] = np.nan
         
-        # HIỂN THỊ KẾT QUẢ
-        st.subheader("📊 Bảng Kết Quả Chi Tiết")
+        # DISPLAY
+        st.subheader("📊 Bảng Kết Quả")
         cols = {'Tháng': 'Tháng', 'Thuc_te': 'Thực Tế', 'Gemini_Pct': '% Đ.Chỉnh',
                 'NN_Goc': 'NN Gốc', 'NN_Final': 'NN (Đã chỉnh)',
                 'RF_Goc': 'RF Gốc', 'RF_Final': 'RF (Đã chỉnh)',
@@ -332,7 +337,7 @@ if uploaded_train and uploaded_input:
             'XGB Gốc': '{:,.0f}', 'XGB (Đã chỉnh)': '{:,.0f}',
         }), use_container_width=True)
 
-        st.subheader("📈 Biểu Đồ So Sánh")
+        st.subheader("📈 Biểu Đồ")
         df_show['Date'] = pd.to_datetime(dict(year=df_show['Năm'], month=df_show['Tháng'], day=1))
         fig, ax = plt.subplots(figsize=(14,6))
         ax.plot(df_show['Date'], df_show['NN_Goc'], '--', color='gray', label='NN Gốc', alpha=0.5)
