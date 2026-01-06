@@ -7,7 +7,8 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
 import xgboost as xgb
 import io
-import time # Dùng để tạo ID ngẫu nhiên theo thời gian thực
+import time
+import random # Thêm thư viện ngẫu nhiên
 
 # --- KIỂM TRA THƯ VIỆN ---
 try:
@@ -25,7 +26,7 @@ except ImportError:
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Hệ Thống Dự Báo Phụ Tải", layout="wide")
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH LONG AN")
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN")
 st.markdown("---")
 
 # ==============================================================================
@@ -90,7 +91,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
     except Exception as e: return 0.0, f"❌ Lỗi AI: {str(e)}", ""
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (ĐÃ BỎ CACHE HOÀN TOÀN)
+# 2. HÀM TÍNH TOÁN (KHÔNG CACHE)
 # ==============================================================================
 def feature_engineering(df):
     def check_tet(row):
@@ -104,7 +105,7 @@ def feature_engineering(df):
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6, 7, 8, 9, 10, 11] else 0)
     return df
 
-# KHÔNG DÙNG CACHE NỮA - ÉP CHẠY LẠI MỖI LẦN
+# KHÔNG DÙNG @st.cache_data
 def chay_mo_phong(df_train_origin, df_input_origin, exogenous_params, user_seed):
     df_train = df_train_origin.copy()
     df_input = df_input_origin.copy()
@@ -171,14 +172,16 @@ with st.sidebar:
     st.header("⚙️ Cấu Hình")
     api_key = st.text_input("Nhập Khóa API", value="", type="password")
     st.markdown("---")
-    selected_seed = st.number_input("Random Seed", value=42, step=1)
     
-    # NÚT XÓA SỔ DỮ LIỆU CŨ
-    if st.button("🗑️ XÓA HẾT DỮ LIỆU CŨ", type="secondary"):
-        st.cache_data.clear()
-        if 'param_dict' in st.session_state: del st.session_state.param_dict
-        if 'final_result' in st.session_state: del st.session_state.final_result
-        st.rerun()
+    # --- CHẾ ĐỘ NGẪU NHIÊN ĐỂ THOÁT KHỎI SỐ CŨ ---
+    use_random = st.checkbox("🎲 Chế độ Ngẫu Nhiên (Mỗi lần bấm ra số khác)", value=False)
+    if use_random:
+        # Nếu chọn ngẫu nhiên, tạo số mới mỗi giây
+        selected_seed = int(time.time()) % 1000 
+        st.caption(f"Đang dùng Seed ngẫu nhiên: {selected_seed}")
+    else:
+        # Nếu không, dùng số cố định (Mặc định 42)
+        selected_seed = st.number_input("Random Seed (Cố định)", value=42, step=1)
 
 col1, col2 = st.columns(2)
 with col1: uploaded_train = st.file_uploader("1. Dữ liệu Lịch sử (Train)", type=['xlsx', 'xls'])
@@ -188,7 +191,7 @@ st.write("---")
 if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 
 # PHẦN 1: PHÂN TÍCH
-st.subheader("📰 Phân Tích Thông Tin & Kịch Bản")
+st.subheader("📰 Phân Tích Thông Tin")
 c1, c2 = st.columns([2, 1])
 
 if 'detected_months' not in st.session_state: st.session_state.detected_months = []
@@ -228,7 +231,7 @@ if 'detected_months' in st.session_state and st.session_state.detected_months:
         current_val = st.session_state.get('temp_score', 0.0)
         final_score = st.number_input("Điều chỉnh % (Nhập 0 để Hủy):", value=float(current_val), step=0.1, format="%.2f")
     
-    if st.button("Lưu Kịch Bản"):
+    if st.button("💾 LƯU KỊCH BẢN (Bắt buộc bấm)"):
         temp_dict = {} 
         for s in selected_months_str:
             parts = s.split('/')
@@ -236,31 +239,24 @@ if 'detected_months' in st.session_state and st.session_state.detected_months:
             y = int(parts[1])
             temp_dict[(y, m)] = (final_score, st.session_state.get('temp_reason', ''))
         st.session_state.param_dict = temp_dict
-        st.success(f"Đã lưu: {final_score}% cho các tháng chọn.")
+        st.success(f"✅ Đã lưu kịch bản: {final_score}%")
 
 st.write("---")
 
 # PHẦN 2: CHẠY DỰ BÁO
 if uploaded_train and uploaded_input:
-    # TẠO ID MỚI MỖI LẦN BẤM NÚT ĐỂ ÉP CHẠY LẠI
     if st.button("🚀 THỰC HIỆN DỰ BÁO", type="primary"):
-        # Xóa kết quả cũ nếu có
-        if 'final_result' in st.session_state: del st.session_state.final_result
-        
         try:
             try: df_train_org = pd.read_excel(uploaded_train, sheet_name='Bang tinh 5 tppt')
             except: df_train_org = pd.read_excel(uploaded_train, sheet_name=0)
             df_input_org = pd.read_excel(uploaded_input)
 
-            # --- TẠO RA BIẾN run_id ĐỂ ĐẢM BẢO KHÔNG BỊ TRÙNG KẾT QUẢ CŨ ---
-            run_id = str(time.time()) 
-            with st.spinner(f"Đang tính toán lại (Run ID: {run_id[-4:]})..."):
+            # --- DEBUG PANEL: HIỂN THỊ THÔNG SỐ ĐANG CHẠY ---
+            st.info(f"🔍 DEBUG: Đang chạy với Seed = {selected_seed} | Số tháng điều chỉnh: {len(st.session_state.param_dict)}")
+            
+            with st.spinner(f"Đang tính toán (Seed={selected_seed})..."):
                 df_final = chay_mo_phong(df_train_org, df_input_org, st.session_state.param_dict, selected_seed)
                 
-                # Lưu kết quả mới vào Session State
-                st.session_state.final_result = df_final
-                
-                # Xử lý hiển thị
                 df_actual = df_train_org[['Năm', 'Tháng', 'Tổng thương phẩm']].copy()
                 df_final = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
                 df_final.rename(columns={'Tổng thương phẩm': 'Thuc_te'}, inplace=True)
