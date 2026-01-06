@@ -23,7 +23,7 @@ try:
 except: HAS_GEMINI = False
 
 # ==============================================================================
-# 1. MODULE AI & WEB (GIỮ NGUYÊN)
+# 1. MODULE AI & WEB (ĐÃ KHÔI PHỤC TÍNH NĂNG TỰ DÒ THÔNG MINH)
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -51,7 +51,31 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-pro")
+        
+        # --- THUẬT TOÁN TỰ DÒ MODEL THÔNG MINH ---
+        # Mặc định an toàn nhất hiện nay
+        best_model_name = "gemini-1.5-flash" 
+        try:
+            # Quét danh sách model mà API Key này được phép dùng
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    name = m.name.lower()
+                    # Ưu tiên số 1: Flash (Nhanh nhất)
+                    if "1.5-flash" in name:
+                        best_model_name = m.name
+                        break # Tìm thấy chân ái thì chốt luôn
+                    # Ưu tiên số 2: Pro 1.5
+                    elif "1.5-pro" in name:
+                        best_model_name = m.name
+                    # Ưu tiên số 3: Các bản cũ hơn
+                    elif "gemini-pro" in name and "1.5" not in best_model_name:
+                        best_model_name = m.name
+        except:
+            pass # Nếu lỗi lúc dò thì dùng mặc định
+
+        # Khởi tạo model với cái tên tìm được
+        model = genai.GenerativeModel(best_model_name)
+        
         prompt = (f"Đọc tin: '{text_data[:4000]}'. Xác định % tăng/giảm phụ tải điện. "
                   "Trả về: SỐ | LÝ DO. Ví dụ: -1.5 | Giảm 1.5%")
         res = model.generate_content(prompt).text.strip()
@@ -59,29 +83,34 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
         if "|" in res:
             parts = res.split("|")
             val = float(parts[0].strip())
-            return val, f"{status}✅ Xong!", parts[1].strip()
+            return val, f"{status}✅ Xong (Dùng {best_model_name})!", parts[1].strip()
+        
+        # Dự phòng trường hợp AI quên format
+        import re
+        match = re.search(r'-?\d+(\.\d+)?', res)
+        if match:
+             val = float(match.group())
+             return val, f"{status}✅ Xong (AI tự bắt số)!", res
+             
         return 0.0, "⚠️ Không rõ số.", ""
     except Exception as e: return 0.0, f"❌ Lỗi: {e}", ""
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (CÁCH LY TUYỆT ĐỐI)
+# 2. HÀM TÍNH TOÁN (CÁCH LY TUYỆT ĐỐI - KHÔNG SỢ NHỚ DAI)
 # ==============================================================================
 def feature_engineering(df):
-    # Tạo các đặc trưng cơ bản
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
-    # Lịch Tết đơn giản
     def check_tet(row):
         return 1 if (row['Năm']==2025 and row['Tháng']==1) or (row['Năm']==2024 and row['Tháng']==2) else 0
     df['Co_Tet'] = df.apply(check_tet, axis=1)
     return df
 
-# HÀM NÀY CHỈ CHẠY MÔ HÌNH TRÊN DỮ LIỆU SẠCH (KHÔNG CÓ GEMINI)
 def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
     df_train = df_train_origin.copy()
     df_input = df_input_origin.copy()
 
-    # --- QUAN TRỌNG: LUÔN GÁN BIẾN NGOẠI SINH = 0 ĐỂ MODEL ỔN ĐỊNH ---
+    # LUÔN GÁN = 0 ĐỂ MÔ HÌNH KHÔNG BỊ NHIỄM SỐ LIỆU LẠ
     df_train['Bien_Ngoai_Sinh'] = 0
     df_input['Bien_Ngoai_Sinh'] = 0
 
@@ -111,7 +140,7 @@ def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
     xgb_model = xgb.XGBRegressor(n_estimators=50, random_state=42, n_jobs=-1)
     xgb_model.fit(X, y)
 
-    # DỰ BÁO BASELINE (GỐC)
+    # DỰ BÁO GỐC (BASELINE)
     df_pred = df_input.copy().sort_values(['Năm', 'Tháng'])
     df_pred[valid_features] = df_pred[valid_features].fillna(0)
     
@@ -157,11 +186,11 @@ with c2:
         except: pass
     
     if st.button("Phân Tích Ngay"):
-        with st.spinner("AI đang đọc..."):
+        with st.spinner("AI đang tự dò model & đọc tin..."):
             val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
         if "Lỗi" in log: st.warning(log)
         else:
-            st.success(f"{log} -> {val}%")
+            st.success(log)
             st.session_state.temp_score = val
             st.session_state.temp_reason = reason
 
@@ -189,19 +218,17 @@ st.write("---")
 # --- PHẦN 3: CHẠY DỰ BÁO VÀ TỰ CỘNG TRỪ ---
 if uploaded_train and uploaded_input:
     if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
-        # 1. Chạy mô hình trên dữ liệu sạch (Ra số Gốc ổn định)
+        # 1. Chạy mô hình trên dữ liệu sạch
         with st.spinner("Đang chạy mô hình gốc..."):
             df_final = chay_mo_phong_sach(pd.read_excel(uploaded_train), pd.read_excel(uploaded_input), selected_seed)
 
-        # 2. Cộng trừ thủ công bên ngoài (Post-processing)
+        # 2. Cộng trừ thủ công bên ngoài
         def apply_adjustment(row):
-            # Lấy % từ kịch bản
             param = st.session_state.param_dict.get((row['Năm'], row['Tháng']), (0.0, ""))
             pct = param[0]
             reason = param[1]
             factor = 1.0 + (pct / 100.0)
             
-            # Nhân hệ số cho từng phương pháp
             return (
                 row['NN_Goc'] * factor, 
                 row['RF_Goc'] * factor, 
@@ -210,7 +237,6 @@ if uploaded_train and uploaded_input:
                 reason
             )
 
-        # Áp dụng hàm cộng trừ
         adj_res = df_final.apply(apply_adjustment, axis=1, result_type='expand')
         df_final['NN_Final'] = adj_res[0]
         df_final['RF_Final'] = adj_res[1]
@@ -218,13 +244,12 @@ if uploaded_train and uploaded_input:
         df_final['Gemini_Pct'] = adj_res[3]
         df_final['Lý_do'] = adj_res[4]
 
-        # Ghép thực tế để so sánh
         df_actual = pd.read_excel(uploaded_train)[['Năm', 'Tháng', 'Tổng thương phẩm']]
         df_show = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
         df_show['Thuc_te'] = df_show['Tổng thương phẩm']
         
         # HIỂN THỊ
-        st.subheader("📊 Bảng Kết Quả (Gốc vs Đã Điều Chỉnh)")
+        st.subheader("📊 Bảng Kết Quả")
         
         cols = {
             'Tháng': 'Tháng', 'Thuc_te': 'Thực Tế',
@@ -235,7 +260,6 @@ if uploaded_train and uploaded_input:
             'Lý_do': 'Lý do'
         }
         
-        # Format bảng đẹp
         df_display = df_show[['Năm'] + list(cols.keys())].rename(columns=cols)
         df_display['% Đ.Chỉnh'] = df_display['% Đ.Chỉnh'].apply(lambda x: f"{x:+.1f}%" if x!=0 else "-")
         
@@ -246,7 +270,6 @@ if uploaded_train and uploaded_input:
             'XGB Gốc': '{:,.0f}', 'XGB (Đã chỉnh)': '{:,.0f}',
         }), use_container_width=True)
 
-        # Biểu đồ
         st.subheader("📈 Biểu Đồ")
         df_show['Date'] = pd.to_datetime(dict(year=df_show['Năm'], month=df_show['Tháng'], day=1))
         fig, ax = plt.subplots(figsize=(14,6))
