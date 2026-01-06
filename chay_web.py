@@ -91,59 +91,77 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
     except Exception as e: return 0.0, f"❌ Lỗi: {str(e)[:100]}", ""
 
 # ==============================================================================
-# 2. HÀM TÍNH TOÁN (ĐÃ SỬA LỖI KEY ERROR)
+# 2. HÀM TÍNH TOÁN & XỬ LÝ FILE THÔNG MINH
 # ==============================================================================
 
-# --- HÀM MỚI: TỰ ĐỘNG SỬA TÊN CỘT ---
+# --- HÀM MỚI: ĐỌC FILE THÔNG MINH (BỎ QUA DÒNG TIÊU ĐỀ THỪA) ---
+def smart_read_excel(uploaded_file):
+    """
+    Hàm này quét 10 dòng đầu để tìm xem dòng nào chứa chữ 'Năm' và 'Tháng'
+    để làm dòng tiêu đề chính thức.
+    """
+    try:
+        # Đọc thử 10 dòng đầu, không lấy header
+        df_preview = pd.read_excel(uploaded_file, header=None, nrows=10)
+        
+        header_row = 0
+        found = False
+        
+        # Quét từng dòng
+        for i, row in df_preview.iterrows():
+            row_str = row.astype(str).str.lower().tolist()
+            # Kiểm tra xem dòng này có chứa từ khóa quan trọng không
+            # Chấp nhận cả tiếng Việt và tiếng Anh
+            has_year = any(x in str(r) for r in row_str for x in ['năm', 'nam', 'year'])
+            has_month = any(x in str(r) for r in row_str for x in ['tháng', 'thang', 'month'])
+            
+            if has_year and has_month:
+                header_row = i
+                found = True
+                break
+        
+        # Reset con trỏ file về đầu để đọc lại từ dòng tìm được
+        uploaded_file.seek(0)
+        df = pd.read_excel(uploaded_file, header=header_row)
+        return df
+        
+    except Exception as e:
+        st.error(f"Lỗi đọc file: {e}")
+        return pd.DataFrame()
+
 def chuan_hoa_ten_cot(df):
-    """
-    Hàm này tự động đổi tên cột về chuẩn: 'Năm', 'Tháng', 'Tổng thương phẩm'
-    Bất chấp file Excel ghi là 'Month', 'thang', 'Year', 'nam', v.v.
-    """
-    # Xóa khoảng trắng thừa ở tên cột
     df.columns = df.columns.str.strip()
-    
-    # Map các tên có thể gặp sang tên chuẩn
     col_map = {
-        # Tháng
         'month': 'Tháng', 'thang': 'Tháng', 'tháng': 'Tháng', 'Thang': 'Tháng',
-        # Năm
         'year': 'Năm', 'nam': 'Năm', 'năm': 'Năm', 'Nam': 'Năm',
-        # Sản lượng
         'tổng thương phẩm': 'Tổng thương phẩm', 'tong thuong pham': 'Tổng thương phẩm',
         'thuong pham': 'Tổng thương phẩm', 'sản lượng': 'Tổng thương phẩm',
         'san luong': 'Tổng thương phẩm', 'commercial': 'Tổng thương phẩm'
     }
-    
     new_cols = {}
     for col in df.columns:
         col_lower = str(col).lower()
         if col_lower in col_map:
             new_cols[col] = col_map[col_lower]
-            
     df = df.rename(columns=new_cols)
     return df
 
 def feature_engineering(df):
-    # Trước khi xử lý, phải đảm bảo cột tồn tại
     if 'Tháng' not in df.columns or 'Năm' not in df.columns:
-        # Nếu vẫn không tìm thấy sau khi chuẩn hóa -> Báo lỗi mềm thay vì sập
-        st.error(f"❌ Lỗi dữ liệu: File thiếu cột 'Tháng' hoặc 'Năm'. Các cột hiện có: {list(df.columns)}")
+        st.error(f"❌ Lỗi dữ liệu: Sau khi quét vẫn thiếu cột 'Tháng'/'Năm'. Cột hiện có: {list(df.columns)}")
         st.stop()
         
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
     
     def check_tet(row):
-        try:
-            return 1 if (row['Năm']==2025 and row['Tháng']==1) or (row['Năm']==2024 and row['Tháng']==2) else 0
+        try: return 1 if (row['Năm']==2025 and row['Tháng']==1) or (row['Năm']==2024 and row['Tháng']==2) else 0
         except: return 0
-        
     df['Co_Tet'] = df.apply(check_tet, axis=1)
     return df
 
 def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
-    # --- ÁP DỤNG CHUẨN HÓA TÊN CỘT NGAY ĐẦU VÀO ---
+    # Chuẩn hóa tên cột
     df_train = chuan_hoa_ten_cot(df_train_origin.copy())
     df_input = chuan_hoa_ten_cot(df_input_origin.copy())
 
@@ -157,9 +175,8 @@ def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
     valid_features = [f for f in features if f in df_train.columns and f in df_input.columns]
     target = 'Tổng thương phẩm'
     
-    # Kiểm tra target tồn tại
     if target not in df_train.columns:
-        st.error("❌ Lỗi: Không tìm thấy cột 'Tổng thương phẩm' (hoặc tương đương) trong file Train.")
+        st.error("❌ Lỗi: Không tìm thấy cột 'Tổng thương phẩm' trong file Train.")
         st.stop()
 
     data_clean = df_train.dropna(subset=valid_features + [target]).copy()
@@ -172,10 +189,8 @@ def chay_mo_phong_sach(df_train_origin, df_input_origin, user_seed):
     # Models
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', max_iter=5000, random_state=user_seed)
     nn.fit(X_scaled, y)
-    
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
     rf.fit(X, y)
-
     xgb_model = xgb.XGBRegressor(n_estimators=50, random_state=42, n_jobs=-1)
     xgb_model.fit(X, y)
 
@@ -220,9 +235,9 @@ with c1:
 with c2:
     if uploaded_input:
         try:
-            # Đọc thử để lấy tháng, nhớ chuẩn hóa cột trước khi đọc
-            df_temp = pd.read_excel(uploaded_input)
-            df_temp = chuan_hoa_ten_cot(df_temp) # SỬA LỖI: Chuẩn hóa ngay tại đây
+            # SỬA LỖI: Dùng smart_read_excel để đọc file input cho AI
+            df_temp = smart_read_excel(uploaded_input)
+            df_temp = chuan_hoa_ten_cot(df_temp)
             if 'Năm' in df_temp.columns and 'Tháng' in df_temp.columns:
                 st.session_state.detected_months = sorted(list(set(zip(df_temp['Năm'], df_temp['Tháng']))))
         except: pass
@@ -265,8 +280,11 @@ st.write("---")
 if uploaded_train and uploaded_input:
     if st.button("🚀 CHẠY DỰ BÁO", type="primary"):
         with st.spinner("Đang chạy mô hình gốc..."):
-            # Sửa lỗi: Đọc file xong phải pass qua hàm chuẩn hóa bên trong chay_mo_phong_sach
-            df_final = chay_mo_phong_sach(pd.read_excel(uploaded_train), pd.read_excel(uploaded_input), selected_seed)
+            # SỬA LỖI: Dùng smart_read_excel cho cả 2 file
+            df_train_raw = smart_read_excel(uploaded_train)
+            df_input_raw = smart_read_excel(uploaded_input)
+            
+            df_final = chay_mo_phong_sach(df_train_raw, df_input_raw, selected_seed)
 
         def apply_adjustment(row):
             param = st.session_state.param_dict.get((row['Năm'], row['Tháng']), (0.0, ""))
@@ -282,13 +300,17 @@ if uploaded_train and uploaded_input:
         df_final['Gemini_Pct'] = adj_res[3]
         df_final['Lý_do'] = adj_res[4]
 
-        # Chuẩn hóa cả file train gốc để merge cho đúng
-        df_actual_raw = pd.read_excel(uploaded_train)
+        # Merge với thực tế (cũng phải đọc thông minh)
+        df_actual_raw = smart_read_excel(uploaded_train)
         df_actual_raw = chuan_hoa_ten_cot(df_actual_raw)
         
-        df_actual = df_actual_raw[['Năm', 'Tháng', 'Tổng thương phẩm']]
-        df_show = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
-        df_show['Thuc_te'] = df_show['Tổng thương phẩm']
+        if 'Tổng thương phẩm' in df_actual_raw.columns:
+            df_actual = df_actual_raw[['Năm', 'Tháng', 'Tổng thương phẩm']]
+            df_show = pd.merge(df_final, df_actual, on=['Năm', 'Tháng'], how='left')
+            df_show['Thuc_te'] = df_show['Tổng thương phẩm']
+        else:
+            df_show = df_final.copy()
+            df_show['Thuc_te'] = np.nan
         
         # HIỂN THỊ
         st.subheader("📊 Bảng Kết Quả")
