@@ -327,7 +327,7 @@ with c2:
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
-st.write("### ✍️ Quyết Định Của Bạn")
+st.write("### ✍️ CHỐT SỐ LIỆU")
 
 if st.session_state.detected_months:
     c_a, c_b = st.columns(2)
@@ -420,3 +420,4 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
