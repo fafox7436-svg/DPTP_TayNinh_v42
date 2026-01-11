@@ -19,7 +19,7 @@ st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
 # >>> THÊM ĐOẠN NÀY VÀO <<<
 try:
     # Vì file ảnh đã upload lên cùng thư mục với file code trên GitHub
-    st.image("image_1.png", width=500) 
+    st.image("image_1.png", width=100) 
 except:
     st.write("Đang tải logo...")
 # >>> KẾT THÚC ĐOẠN THÊM <<<
@@ -429,5 +429,6 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
 
 
