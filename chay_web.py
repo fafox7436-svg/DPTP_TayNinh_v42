@@ -470,117 +470,105 @@ if f_train and f_input:
                 st.pyplot(fig)
 
 # ==============================================================================
-# 5. MÁY QUÉT CHI TIẾT (XEM KẾT QUẢ TỪNG HẠT GIỐNG)
+# 5. MÁY QUÉT CHI TIẾT (PHIÊN BẢN ĐÃ SỬA LỖI HIỂN THỊ)
 # ==============================================================================
 st.markdown("---")
 st.header("🔬 Máy Soi Seed Chi Tiết")
-st.caption("Chạy và hiển thị kết quả của TẤT CẢ hạt giống trong khoảng quét để bạn đánh giá.")
+st.caption("Chạy và hiển thị kết quả của TẤT CẢ hạt giống (Kể cả Đạt và Không Đạt).")
 
-# Khởi tạo trạng thái
+# 1. Khởi tạo bộ nhớ (Session State)
 if 'scan_current_seed' not in st.session_state:
-    st.session_state.scan_current_seed = 0 # Bắt đầu từ 0
+    st.session_state.scan_current_seed = 0
 if 'scan_history' not in st.session_state:
     st.session_state.scan_history = pd.DataFrame()
 
+# 2. Giao diện điều khiển
 if f_train and f_input:
-    with st.expander("BẢNG ĐIỀU KHIỂN & KẾT QUẢ", expanded=True):
+    with st.expander("BẢNG ĐIỀU KHIỂN", expanded=True):
         c1, c2, c3 = st.columns(3)
         with c1:
             target_val = st.number_input("Mục tiêu mong muốn", value=737.0, step=1.0)
         with c2:
             acc = st.slider("Chấp nhận sai số (+/- %)", 0.1, 5.0, 1.0)
         with c3:
-            batch_size = st.number_input("Số lượng hạt giống mỗi lần chạy", value=50, step=10)
+            batch_size = st.number_input("Số lượng hạt mỗi lần chạy", value=20, step=10)
 
-        # Tính toán giới hạn để đánh giá Đạt/Không Đạt
         limit_min = target_val * (1 - acc/100)
         limit_max = target_val * (1 + acc/100)
-
-        # Xác định khoảng chạy
+        
         start_seed = st.session_state.scan_current_seed
         end_seed = start_seed + batch_size - 1
         
-        st.info(f"📍 Sẽ chạy kiểm tra từ **Seed {start_seed}** đến **Seed {end_seed}**")
+        st.info(f"📍 Chuẩn bị chạy từ **Seed {start_seed}** đến **Seed {end_seed}**")
 
         col_run, col_reset = st.columns([1, 4])
         
-        with col_run:
-            run_btn = st.button(f"▶️ Chạy {start_seed}-{end_seed}")
+        # Nút bấm chạy
+        run_check = col_run.button(f"▶️ Chạy {start_seed}-{end_seed}")
         
-        with col_reset:
-            if st.button("🗑️ Xóa lịch sử & Về 0"):
-                st.session_state.scan_current_seed = 0
-                st.session_state.scan_history = pd.DataFrame()
-                st.rerun()
-
-        if run_btn:
-            df_train_scan = ultra_scan_read_excel(f_train)
-            df_input_scan = ultra_scan_read_excel(f_input)
-            
-            # Danh sách lưu kết quả mẻ này
-            batch_data = []
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # --- VÒNG LẶP ---
-            for i, seed in enumerate(range(start_seed, end_seed + 1)):
-                try:
-                    # Chạy mô hình
-                    p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=seed)
-                    val = np.sum(p_nn)
-                    
-                    # Đánh giá ngay lập tức
-                    is_pass = limit_min <= val <= limit_max
-                    status = "✅ ĐẠT" if is_pass else "❌ Loại"
-                    
-                    batch_data.append({
-                        "Seed": seed,
-                        "Kết quả": val,
-                        "Độ lệch": val - target_val,
-                        "Trạng thái": status
-                    })
-                except:
-                    batch_data.append({"Seed": seed, "Kết quả": 0, "Độ lệch": 0, "Trạng thái": "⚠️ Lỗi"})
-                
-                progress_bar.progress((i + 1) / batch_size)
-                status_text.text(f"Đang tính toán Seed {seed}...")
-            
-            # Cập nhật vào lịch sử chung
-            new_df = pd.DataFrame(batch_data)
-            st.session_state.scan_history = pd.concat([st.session_state.scan_history, new_df], ignore_index=True)
-            
-            # Tăng biến đếm cho lần sau
-            st.session_state.scan_current_seed = end_seed + 1
+        # Nút xóa
+        if col_reset.button("🗑️ Xóa lịch sử & Về 0"):
+            st.session_state.scan_current_seed = 0
+            st.session_state.scan_history = pd.DataFrame()
             st.rerun()
 
-    # --- HIỂN THỊ BẢNG KẾT QUẢ ---
-    if not st.session_state.scan_history.empty:
-        st.write("### 📋 Bảng Chi Tiết Các Hạt Giống Đã Chạy")
+    # 3. Xử lý logic (Khi bấm nút)
+    if run_check:
+        df_train_scan = ultra_scan_read_excel(f_train)
+        df_input_scan = ultra_scan_read_excel(f_input)
         
-        # Tô màu cho đẹp: Dòng nào "ĐẠT" sẽ được bôi xanh
-        def highlight_pass(row):
-            return ['background-color: #d4edda; color: #155724' if row['Trạng thái'] == '✅ ĐẠT' else '' for _ in row]
+        batch_data = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i, seed in enumerate(range(start_seed, end_seed + 1)):
+            try:
+                # --- QUAN TRỌNG: Hàm này phải nhận biến seed ---
+                p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=seed)
+                val = np.sum(p_nn)
+                
+                is_pass = limit_min <= val <= limit_max
+                status = "✅ ĐẠT" if is_pass else "❌ Loại"
+                
+                batch_data.append({
+                    "Seed": seed,
+                    "Kết quả": val,
+                    "Độ lệch": val - target_val,
+                    "Trạng thái": status
+                })
+            except Exception as e:
+                # Nếu lỗi, vẫn ghi vào bảng để biết là lỗi
+                batch_data.append({"Seed": seed, "Kết quả": 0, "Độ lệch": 0, "Trạng thái": f"⚠️ Lỗi code: {str(e)[:20]}"})
+            
+            progress_bar.progress((i + 1) / batch_size)
+            status_text.text(f"Đang tính seed {seed}...")
+        
+        # Lưu vào bộ nhớ chung
+        new_df = pd.DataFrame(batch_data)
+        st.session_state.scan_history = pd.concat([st.session_state.scan_history, new_df], ignore_index=True)
+        st.session_state.scan_current_seed = end_seed + 1
+        st.rerun() # Tải lại trang để hiện bảng
 
-        # Hiển thị bảng dữ liệu (Sắp xếp Seed tăng dần để bạn dễ theo dõi 0, 1, 2...)
+    # 4. HIỂN THỊ BẢNG (NẰM NGOÀI NÚT BẤM -> LUÔN LUÔN HIỆN)
+    st.write("---")
+    st.subheader("📋 Bảng Kết Quả Chi Tiết")
+    
+    if not st.session_state.scan_history.empty:
+        # Sắp xếp theo Seed để dễ nhìn
         df_show = st.session_state.scan_history.sort_values(by='Seed')
         
+        # Tô màu
+        def highlight_pass(row):
+            if "ĐẠT" in str(row['Trạng thái']):
+                return ['background-color: #d4edda; color: #155724'] * len(row)
+            elif "Lỗi" in str(row['Trạng thái']):
+                return ['background-color: #f8d7da; color: #721c24'] * len(row)
+            return [''] * len(row)
+
         st.dataframe(df_show.style.apply(highlight_pass, axis=1).format({
             "Seed": "{:.0f}",
             "Kết quả": "{:,.2f}",
             "Độ lệch": "{:+,.2f}"
-        }), use_container_width=True, height=400)
-        
-        # Tổng kết nhanh
-        good_seeds = df_show[df_show['Trạng thái'].str.contains("ĐẠT")]
-        if not good_seeds.empty:
-            best_one = good_seeds.iloc[0]
-            st.success(f"🎉 Đã tìm thấy **{len(good_seeds)}** hạt giống tốt! (Ví dụ Seed **{best_one['Seed']:.0f}** ra {best_one['Kết quả']:,.2f})")
-
-
-
-
-
-
-
-
+        }), use_container_width=True, height=500)
+    else:
+        st.info("👋 Chưa có dữ liệu. Hãy bấm nút 'Chạy' ở trên.")
