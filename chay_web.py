@@ -14,28 +14,53 @@ import time
 import calendar
 
 # --- CẤU HÌNH ---
-st.set_page_config(page_title="Dự Báo Phụ Tải", layout="wide")
-# (Các dòng import khác giữ nguyên)
+st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
 
 # ==============================================================================
-# TIÊU ĐỀ VÀ LOGO (FONT NHỎ GỌN & CÂN ĐỐI)
+# 🎨 GIAO DIỆN & CSS (LÀM ĐẸP)
 # ==============================================================================
-# vertical_alignment="center": Để chữ và logo thẳng hàng nhau ở giữa
+st.markdown("""
+<style>
+    /* 1. Tạo nền Gradient Trắng - Xanh Dương nhạt */
+    .stApp {
+        background: rgb(255,255,255);
+        background: linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(235,245,255,1) 100%);
+    }
+
+    /* 2. Đổi màu chữ tiêu đề thành Xanh Đậm (theo tông màu EVN) */
+    h1, h2, h3, h4 {
+        color: #004b8d !important; /* Xanh EVN */
+        font-family: 'Segoe UI', Tahoma, sans-serif;
+    }
+    
+    /* 3. Chỉnh màu chữ mô tả và nhãn cho đậm hơn chút để dễ đọc trên nền xanh */
+    p, label, .stMarkdown {
+        color: #333333;
+    }
+
+    /* 4. Thu gọn lề trên cùng (Padding) để bố cục cân đối hơn */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 5rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==============================================================================
+# TIÊU ĐỀ VÀ LOGO (ĐÃ CĂN CHỈNH)
+# ==============================================================================
+# Chia cột tỷ lệ: Chữ 8 phần - Logo 2 phần
 col1, col2 = st.columns([8, 2], vertical_alignment="center")
 
 with col1:
-    # Thay st.title bằng html h3 để chữ nhỏ hơn
-    st.markdown("""
-    <h3 style="text-align: left; margin-bottom: 0px;">
-        HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH
-    </h3>
-    """, unsafe_allow_html=True)
+    # Tiêu đề H3: Vừa vặn, màu xanh (đã định dạng ở trên)
+    st.markdown("<h3>HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH</h3>", unsafe_allow_html=True)
 
 with col2:
     try:
         st.image("image_1.png", use_column_width=True)
     except:
-        st.write("Logo")
+        st.write("EVN SPC")
 
 st.markdown("---")
 # --- KIỂM TRA THƯ VIỆN AI ---
@@ -440,6 +465,7 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
 
 
 
