@@ -456,11 +456,11 @@ if f_train and f_input:
                 st.pyplot(fig)
 
 # ==============================================================================
-# 4. MÁY SOI SEED CHI TIẾT (ĐÃ SỬA LỖI 23 TỶ & LỖI HIỂN THỊ)
+# 5. MÁY SOI SEED ĐA MÔ HÌNH (PHIÊN BẢN CAO CẤP)
 # ==============================================================================
 st.markdown("---")
-st.header("🔬 Máy Soi Seed Chi Tiết")
-st.caption("Chạy và hiển thị kết quả dự báo của THÁNG ĐẦU TIÊN trong file Input.")
+st.header("🔬 Máy Soi Seed Đa Mô Hình")
+st.caption("So sánh cả 3 mô hình (Neural Network, Random Forest, XGBoost) để tìm ra kết quả tốt nhất.")
 
 # 1. Khởi tạo
 if 'scan_current_seed' not in st.session_state:
@@ -470,14 +470,15 @@ if 'scan_history' not in st.session_state:
 
 # 2. Giao diện
 if f_train and f_input:
-    with st.expander("BẢNG ĐIỀU KHIỂN SOI SEED", expanded=True):
+    with st.expander("BẢNG ĐIỀU KHIỂN", expanded=True):
         c1, c2, c3 = st.columns(3)
         with c1:
             target_val = st.number_input("Mục tiêu mong muốn (Tháng đầu)", value=740000000.0, step=1000000.0, format="%.0f")
         with c2:
-            acc = st.slider("Chấp nhận sai số (+/- %)", 0.1, 5.0, 1.0)
+            model_choice = st.selectbox("Chọn mô hình để bắt Seed:", ["Neural Network", "Random Forest", "XGBoost", "Lấy Trung Bình 3 cái"])
+            acc = st.slider("Chấp nhận sai số (+/- %)", 0.1, 10.0, 2.0)
         with c3:
-            batch_size = st.number_input("Số lượng hạt mỗi lần chạy", value=20, step=10)
+            batch_size = st.number_input("Số lượng hạt mỗi lần chạy", value=10, step=5)
 
         limit_min = target_val * (1 - acc/100)
         limit_max = target_val * (1 + acc/100)
@@ -500,6 +501,10 @@ if f_train and f_input:
         df_train_scan = ultra_scan_read_excel(f_train)
         df_input_scan = ultra_scan_read_excel(f_input)
         
+        # Lấy thông tin tháng năm của dòng đầu tiên để hiển thị
+        first_row = df_input_scan.iloc[0]
+        month_label = f"{int(first_row['Tháng'])}/{int(first_row['Năm'])}"
+        
         batch_data = []
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -509,44 +514,61 @@ if f_train and f_input:
                 # Chạy mô hình
                 p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=seed)
                 
-                # --- QUAN TRỌNG: CHỈ LẤY THÁNG ĐẦU TIÊN ---
-                val = p_nn[0] 
+                # Lấy giá trị tháng đầu tiên
+                v_nn = p_nn[0]
+                v_rf = p_rf[0]
+                v_xg = p_xg[0]
+                v_avg = (v_nn + v_rf + v_xg) / 3
+                
+                # Quyết định dùng giá trị nào để so sánh
+                if model_choice == "Neural Network": val = v_nn
+                elif model_choice == "Random Forest": val = v_rf
+                elif model_choice == "XGBoost": val = v_xg
+                else: val = v_avg
                 
                 is_pass = limit_min <= val <= limit_max
-                status = "✅ ĐẠT" if is_pass else "❌ Loại"
+                status = "✅ ĐẠT" if is_pass else "❌"
                 
                 batch_data.append({
                     "Seed": seed,
-                    "Kết quả": val,
-                    "Độ lệch": val - target_val,
+                    "Thời gian": month_label,
+                    "Neural Network": v_nn,
+                    "Random Forest": v_rf,
+                    "XGBoost": v_xg,
+                    "Trung Bình": v_avg,
+                    "Độ lệch (So với chọn)": val - target_val,
                     "Trạng thái": status
                 })
             except Exception as e:
-                batch_data.append({"Seed": seed, "Kết quả": 0, "Độ lệch": 0, "Trạng thái": "⚠️ Lỗi"})
+                batch_data.append({"Seed": seed, "Trạng thái": "⚠️ Lỗi"})
             
             progress_bar.progress((i + 1) / batch_size)
             status_text.text(f"Đang tính seed {seed}...")
         
-        # Lưu và hiển thị
         new_df = pd.DataFrame(batch_data)
         st.session_state.scan_history = pd.concat([st.session_state.scan_history, new_df], ignore_index=True)
         st.session_state.scan_current_seed = end_seed + 1
         st.rerun()
 
-    # 4. Hiển thị bảng (Nằm ngoài if run_check để không bị mất khi reload)
+    # 4. Hiển thị bảng
     st.write("---")
-    st.subheader("📋 Kết Quả Dự Báo Tháng Đầu Tiên")
+    st.subheader(f"📋 Kết Quả Chi Tiết (Mục tiêu: {target_val:,.0f})")
     
     if not st.session_state.scan_history.empty:
         df_show = st.session_state.scan_history.sort_values(by='Seed')
         
-        def highlight_pass(row):
+        def highlight_row(row):
             if "ĐẠT" in str(row['Trạng thái']):
                 return ['background-color: #d4edda; color: #155724'] * len(row)
             return [''] * len(row)
 
-        st.dataframe(df_show.style.apply(highlight_pass, axis=1).format({
+        # Format số liệu cho dễ nhìn
+        st.dataframe(df_show.style.apply(highlight_row, axis=1).format({
             "Seed": "{:.0f}",
-            "Kết quả": "{:,.0f}",  
-            "Độ lệch": "{:+,.0f}"
+            "Neural Network": "{:,.0f}",
+            "Random Forest": "{:,.0f}",
+            "XGBoost": "{:,.0f}",
+            "Trung Bình": "{:,.0f}",
+            "Độ lệch (So với chọn)": "{:+,.0f}"
         }), use_container_width=True, height=500)
+
