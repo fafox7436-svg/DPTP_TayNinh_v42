@@ -15,16 +15,26 @@ import calendar
 
 # --- CẤU HÌNH ---
 st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
+# (Các dòng import khác giữ nguyên)
 
-# >>> THÊM ĐOẠN NÀY VÀO <<<
-try:
-    # Vì file ảnh đã upload lên cùng thư mục với file code trên GitHub
-    st.image("image_1.png", width=100) 
-except:
-    st.write("Đang tải logo...")
-# >>> KẾT THÚC ĐOẠN THÊM <<<
+# ==============================================================================
+# TIÊU ĐỀ VÀ LOGO (DÀN HÀNG NGANG)
+# ==============================================================================
+# Tạo 2 cột: Cột trái rộng gấp 4 lần cột phải
+col1, col2 = st.columns([4, 1])
 
-st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH")
+# Cột 1 (Bên trái): Chứa tiêu đề
+with col1:
+    st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH")
+
+# Cột 2 (Bên phải): Chứa logo
+with col2:
+    try:
+        # Hiển thị ảnh và cho phép nó tự co giãn cho vừa cột
+        st.image("image_1.png", use_column_width=True)
+    except:
+        st.write("Logo") # Hiện chữ tạm nếu chưa load được ảnh
+
 st.markdown("---")
 
 # --- KIỂM TRA THƯ VIỆN AI ---
@@ -429,6 +439,7 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
 
 
 
