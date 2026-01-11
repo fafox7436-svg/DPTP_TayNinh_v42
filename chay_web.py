@@ -15,7 +15,16 @@ import calendar
 
 # --- CẤU HÌNH ---
 st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
-st.title("⚡ HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH")
+
+# >>> THÊM ĐOẠN NÀY VÀO <<<
+try:
+    # Vì file ảnh đã upload lên cùng thư mục với file code trên GitHub
+    st.image("image_1.png", width=500) 
+except:
+    st.write("Đang tải logo...")
+# >>> KẾT THÚC ĐOẠN THÊM <<<
+
+st.title("HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH")
 st.markdown("---")
 
 # --- KIỂM TRA THƯ VIỆN AI ---
@@ -420,4 +429,5 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
 
