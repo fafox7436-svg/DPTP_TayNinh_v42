@@ -468,97 +468,105 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
 # ==============================================================================
-# 4. CÔNG CỤ DÒ TÌM HẠT GIỐNG (SEED SCANNER)
+# 5. CÔNG CỤ "THỢ SĂN SEED" (SEED HUNTER) - PHIÊN BẢN VÉT CẠN
 # ==============================================================================
 st.markdown("---")
-st.header("🔍 Công cụ Dò Tìm Hạt Giống (Seed Scanner)")
-st.caption("Công cụ này giúp bạn tìm ra 'Hạt giống' (Seed) để mô hình trả về kết quả gần với mong muốn của bạn nhất.")
+st.header("🏹 Thợ Săn Seed (Quét Diện Rộng)")
+st.caption("Máy tính sẽ tự động thử hàng nghìn số ngẫu nhiên để tìm ra kết quả khớp ý bạn.")
 
-# Chỉ hiện khi đã có file
+# Chỉ hiện khi đã upload đủ file
 if f_train and f_input:
-    with st.expander("Bấm vào đây để mở Công cụ Dò Seed"):
-        col_scan1, col_scan2, col_scan3 = st.columns(3)
+    with st.expander("BẤM VÀO ĐÂY ĐỂ BẮT ĐẦU SĂN SEED", expanded=True):
+        c1, c2, c3 = st.columns(3)
         
-        with col_scan1:
-            # Nhập con số bạn mong muốn (Kỳ vọng)
-            target_value = st.number_input("Giá trị dự báo mong muốn (Tổng)", value=0.0, step=100.0, format="%.2f")
-        
-        with col_scan2:
-            # Sai số chấp nhận được (Ví dụ +/- 2%)
-            tolerance = st.slider("Sai số cho phép (%)", 0.1, 5.0, 1.0)
+        with c1:
+            # 1. Nhập con số bạn muốn (Ví dụ sếp giao chỉ tiêu 737)
+            target_val = st.number_input("Giá trị mong muốn (Tổng)", value=737.0, step=10.0, format="%.2f")
             
-        with col_scan3:
-            # Số lần thử (Càng nhiều càng lâu nhưng càng dễ tìm ra)
-            num_trials = st.number_input("Số lượng Seed muốn thử", value=20, min_value=5, max_value=100)
+        with c2:
+            # 2. Sai số cho phép (Ví dụ lệch +/- 1% là chấp nhận được)
+            acc = st.slider("Sai số cho phép (+/- %)", 0.1, 5.0, 1.0)
+            
+        with c3:
+            # 3. Giới hạn số lần thử (Máy tính chạy rất nhanh, 500 lần chỉ mất khoảng 1-2 phút)
+            max_trials = st.number_input("Số lần thử tối đa", value=200, step=50)
 
-        if st.button("🕵️ Bắt đầu dò tìm Seed"):
-            if target_value == 0:
-                st.warning("⚠️ Vui lòng nhập giá trị dự báo mong muốn khác 0.")
+        # Nút bấm kích hoạt
+        if st.button("🚀 KÍCH HOẠT SĂN TÌM"):
+            # Tính toán khoảng chấp nhận (Ví dụ: 730 đến 744)
+            limit_min = target_val * (1 - acc/100)
+            limit_max = target_val * (1 + acc/100)
+            
+            st.info(f"🎯 Đang tìm hạt giống cho kết quả từ: **{limit_min:,.2f}** đến **{limit_max:,.2f}**")
+            
+            # Đọc dữ liệu (Chỉ đọc 1 lần để tối ưu tốc độ)
+            df_train_scan = ultra_scan_read_excel(f_train)
+            df_input_scan = ultra_scan_read_excel(f_input)
+            
+            found_seeds = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # --- PHẦN QUAN TRỌNG: TẠO RA 1 TRIỆU KHẢ NĂNG ---
+            # Máy tính tạo ra danh sách ngẫu nhiên các số từ 0 đến 1,000,000
+            # Nó sẽ bốc đại các số như: 5521, 99201, 42, 8812... để thử
+            potential_seeds = np.random.randint(0, 1000000, size=max_trials)
+            
+            # Bắt đầu vòng lặp thử sai
+            start_time = time.time()
+            
+            for i, seed in enumerate(potential_seeds):
+                try:
+                    # Chạy mô hình với seed hiện tại
+                    # QUAN TRỌNG: Hàm chay_mo_hinh_goc của bạn phải nhận biến seed
+                    p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=int(seed))
+                    
+                    # Lấy tổng kết quả (Ở đây lấy Neural Network làm chuẩn)
+                    val = np.sum(p_nn)
+                    
+                    # KIỂM TRA: Nếu kết quả rơi vào vùng mong muốn -> BẮT LẠI NGAY
+                    if limit_min <= val <= limit_max:
+                        found_seeds.append({
+                            "Seed (Mã số)": seed,
+                            "Kết quả ra": val,
+                            "Độ lệch": val - target_val
+                        })
+                        
+                except Exception as e:
+                    pass # Bỏ qua lỗi để chạy tiếp
+                
+                # Cập nhật hiển thị (cho đỡ sốt ruột)
+                if i % 5 == 0:
+                    progress_bar.progress((i + 1) / max_trials)
+                    status_text.text(f"Đang thử hạt giống số: {seed}... Đã tìm thấy: {len(found_seeds)}")
+                
+                # DỪNG SỚM: Nếu tìm được 3 hạt giống rồi thì nghỉ, không cần tìm thêm cho đỡ tốn thời gian
+                if len(found_seeds) >= 3:
+                    break
+
+            # KẾT THÚC
+            progress_bar.progress(100)
+            
+            if found_seeds:
+                st.success(f"🎉 TÌM THẤY RỒI! Có {len(found_seeds)} hạt giống khớp với yêu cầu của bạn.")
+                
+                df_res = pd.DataFrame(found_seeds)
+                # Sắp xếp hạt giống nào chuẩn nhất lên đầu
+                df_res['Độ lệch tuyệt đối'] = df_res['Độ lệch'].abs()
+                df_res = df_res.sort_values('Độ lệch tuyệt đối').drop(columns=['Độ lệch tuyệt đối'])
+                
+                st.table(df_res.style.format({
+                    "Seed (Mã số)": "{:.0f}",
+                    "Kết quả ra": "{:,.2f}",
+                    "Độ lệch": "{:+,.2f}"
+                }))
+                
+                best_seed = df_res.iloc[0]['Seed (Mã số)']
+                st.markdown(f"### 👉 Việc cần làm: Quay lên sửa code thành `seed={best_seed}`")
             else:
-                # Chuẩn bị dữ liệu
-                df_train_scan = ultra_scan_read_excel(f_train)
-                df_input_scan = ultra_scan_read_excel(f_input)
-                
-                # Tính khoảng chấp nhận
-                min_val = target_value * (1 - tolerance/100)
-                max_val = target_value * (1 + tolerance/100)
-                
-                st.write(f"🎯 Đang tìm Seed để kết quả nằm trong khoảng: **{min_val:,.0f} - {max_val:,.0f}**")
-                
-                valid_seeds = []
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                # Bắt đầu vòng lặp
-                for i in range(num_trials):
-                    # Tạo seed ngẫu nhiên
-                    current_seed = np.random.randint(1, 10000)
-                    
-                    # Chạy mô hình với seed này (chỉ cần chạy hàm gốc)
-                    # Lưu ý: Hàm chay_mo_hinh_goc cần nhận tham số seed, code gốc của bạn đã có tham số seed=42, 
-                    # hãy chắc chắn hàm chay_mo_hinh_goc nhận biến seed nhé.
-                    try:
-                        p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=current_seed)
-                        
-                        # Lấy tổng dự báo của tháng đầu tiên hoặc tổng cả file input (tùy mục tiêu của bạn)
-                        # Ở đây ví dụ lấy giá trị Neural Network của dòng đầu tiên
-                        total_pred = p_nn[0] 
-                        
-                        # Kiểm tra xem có lọt vào vùng mong muốn không
-                        if min_val <= total_pred <= max_val:
-                            valid_seeds.append({
-                                "Seed (Hạt giống)": current_seed,
-                                "Kết quả NN": total_pred,
-                                "Độ lệch": total_pred - target_value
-                            })
-                            
-                    except Exception as e:
-                        pass
-                    
-                    # Cập nhật tiến độ
-                    progress_bar.progress((i + 1) / num_trials)
-                    status_text.text(f"Đang thử seed thứ {i+1}/{num_trials} (Seed: {current_seed})... Tìm thấy: {len(valid_seeds)}")
-
-                # Hiển thị kết quả
-                st.success("✅ Đã hoàn tất quá trình dò tìm!")
-                if len(valid_seeds) > 0:
-                    st.write("### 🎉 Các hạt giống tốt nhất tìm được:")
-                    df_seeds = pd.DataFrame(valid_seeds)
-                    # Sắp xếp theo độ lệch nhỏ nhất
-                    df_seeds['Độ lệch tuyệt đối'] = df_seeds['Độ lệch'].abs()
-                    df_seeds = df_seeds.sort_values('Độ lệch tuyệt đối').drop(columns=['Độ lệch tuyệt đối'])
-                    
-                    st.dataframe(df_seeds.style.format({
-                        "Seed (Hạt giống)": "{:.0f}",
-                        "Kết quả NN": "{:,.2f}",
-                        "Độ lệch": "{:+,.2f}"
-                    }), use_container_width=True)
-                    
-                    best_seed = df_seeds.iloc[0]['Seed (Hạt giống)']
-                    st.info(f"💡 Mẹo: Hãy quay lại code và sửa `seed={best_seed}` hoặc tạo một ô nhập Seed ở thanh bên để nhập số **{best_seed}** này vào.")
-                else:
-                    st.error("Tiếc quá, không tìm thấy seed nào trong khoảng này. Hãy thử tăng 'Sai số cho phép' hoặc tăng 'Số lượng Seed muốn thử'.")
+                st.error(f"Đã thử {max_trials} số nhưng chưa trúng. Hãy thử tăng 'Sai số' hoặc tăng 'Số lần thử'.")
 
 
 
