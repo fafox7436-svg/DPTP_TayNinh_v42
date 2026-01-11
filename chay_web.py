@@ -470,105 +470,112 @@ if f_train and f_input:
                 st.pyplot(fig)
 
 # ==============================================================================
-# 5. CÔNG CỤ "THỢ SĂN SEED" (SEED HUNTER) - PHIÊN BẢN VÉT CẠN
+# 5. MÁY QUÉT CHI TIẾT (XEM KẾT QUẢ TỪNG HẠT GIỐNG)
 # ==============================================================================
 st.markdown("---")
-st.header("🏹 Thợ Săn Seed (Quét Diện Rộng)")
-st.caption("Máy tính sẽ tự động thử hàng nghìn số ngẫu nhiên để tìm ra kết quả khớp ý bạn.")
+st.header("🔬 Máy Soi Seed Chi Tiết")
+st.caption("Chạy và hiển thị kết quả của TẤT CẢ hạt giống trong khoảng quét để bạn đánh giá.")
 
-# Chỉ hiện khi đã upload đủ file
+# Khởi tạo trạng thái
+if 'scan_current_seed' not in st.session_state:
+    st.session_state.scan_current_seed = 0 # Bắt đầu từ 0
+if 'scan_history' not in st.session_state:
+    st.session_state.scan_history = pd.DataFrame()
+
 if f_train and f_input:
-    with st.expander("BẤM VÀO ĐÂY ĐỂ BẮT ĐẦU SĂN SEED", expanded=True):
+    with st.expander("BẢNG ĐIỀU KHIỂN & KẾT QUẢ", expanded=True):
         c1, c2, c3 = st.columns(3)
-        
         with c1:
-            # 1. Nhập con số bạn muốn (Ví dụ sếp giao chỉ tiêu 737)
-            target_val = st.number_input("Giá trị mong muốn (Tổng)", value=737.0, step=10.0, format="%.2f")
-            
+            target_val = st.number_input("Mục tiêu mong muốn", value=737.0, step=1.0)
         with c2:
-            # 2. Sai số cho phép (Ví dụ lệch +/- 1% là chấp nhận được)
-            acc = st.slider("Sai số cho phép (+/- %)", 0.1, 5.0, 1.0)
-            
+            acc = st.slider("Chấp nhận sai số (+/- %)", 0.1, 5.0, 1.0)
         with c3:
-            # 3. Giới hạn số lần thử (Máy tính chạy rất nhanh, 500 lần chỉ mất khoảng 1-2 phút)
-            max_trials = st.number_input("Số lần thử tối đa", value=200, step=50)
+            batch_size = st.number_input("Số lượng hạt giống mỗi lần chạy", value=50, step=10)
 
-        # Nút bấm kích hoạt
-        if st.button("🚀 KÍCH HOẠT SĂN TÌM"):
-            # Tính toán khoảng chấp nhận (Ví dụ: 730 đến 744)
-            limit_min = target_val * (1 - acc/100)
-            limit_max = target_val * (1 + acc/100)
-            
-            st.info(f"🎯 Đang tìm hạt giống cho kết quả từ: **{limit_min:,.2f}** đến **{limit_max:,.2f}**")
-            
-            # Đọc dữ liệu (Chỉ đọc 1 lần để tối ưu tốc độ)
+        # Tính toán giới hạn để đánh giá Đạt/Không Đạt
+        limit_min = target_val * (1 - acc/100)
+        limit_max = target_val * (1 + acc/100)
+
+        # Xác định khoảng chạy
+        start_seed = st.session_state.scan_current_seed
+        end_seed = start_seed + batch_size - 1
+        
+        st.info(f"📍 Sẽ chạy kiểm tra từ **Seed {start_seed}** đến **Seed {end_seed}**")
+
+        col_run, col_reset = st.columns([1, 4])
+        
+        with col_run:
+            run_btn = st.button(f"▶️ Chạy {start_seed}-{end_seed}")
+        
+        with col_reset:
+            if st.button("🗑️ Xóa lịch sử & Về 0"):
+                st.session_state.scan_current_seed = 0
+                st.session_state.scan_history = pd.DataFrame()
+                st.rerun()
+
+        if run_btn:
             df_train_scan = ultra_scan_read_excel(f_train)
             df_input_scan = ultra_scan_read_excel(f_input)
             
-            found_seeds = []
+            # Danh sách lưu kết quả mẻ này
+            batch_data = []
+            
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            # --- PHẦN QUAN TRỌNG: TẠO RA 1 TRIỆU KHẢ NĂNG ---
-            # Máy tính tạo ra danh sách ngẫu nhiên các số từ 0 đến 1,000,000
-            # Nó sẽ bốc đại các số như: 5521, 99201, 42, 8812... để thử
-            potential_seeds = np.random.randint(0, 1000000, size=max_trials)
-            
-            # Bắt đầu vòng lặp thử sai
-            start_time = time.time()
-            
-            for i, seed in enumerate(potential_seeds):
+            # --- VÒNG LẶP ---
+            for i, seed in enumerate(range(start_seed, end_seed + 1)):
                 try:
-                    # Chạy mô hình với seed hiện tại
-                    # QUAN TRỌNG: Hàm chay_mo_hinh_goc của bạn phải nhận biến seed
-                    p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=int(seed))
-                    
-                    # Lấy tổng kết quả (Ở đây lấy Neural Network làm chuẩn)
+                    # Chạy mô hình
+                    p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=seed)
                     val = np.sum(p_nn)
                     
-                    # KIỂM TRA: Nếu kết quả rơi vào vùng mong muốn -> BẮT LẠI NGAY
-                    if limit_min <= val <= limit_max:
-                        found_seeds.append({
-                            "Seed (Mã số)": seed,
-                            "Kết quả ra": val,
-                            "Độ lệch": val - target_val
-                        })
-                        
-                except Exception as e:
-                    pass # Bỏ qua lỗi để chạy tiếp
+                    # Đánh giá ngay lập tức
+                    is_pass = limit_min <= val <= limit_max
+                    status = "✅ ĐẠT" if is_pass else "❌ Loại"
+                    
+                    batch_data.append({
+                        "Seed": seed,
+                        "Kết quả": val,
+                        "Độ lệch": val - target_val,
+                        "Trạng thái": status
+                    })
+                except:
+                    batch_data.append({"Seed": seed, "Kết quả": 0, "Độ lệch": 0, "Trạng thái": "⚠️ Lỗi"})
                 
-                # Cập nhật hiển thị (cho đỡ sốt ruột)
-                if i % 5 == 0:
-                    progress_bar.progress((i + 1) / max_trials)
-                    status_text.text(f"Đang thử hạt giống số: {seed}... Đã tìm thấy: {len(found_seeds)}")
-                
-                # DỪNG SỚM: Nếu tìm được 3 hạt giống rồi thì nghỉ, không cần tìm thêm cho đỡ tốn thời gian
-                if len(found_seeds) >= 3:
-                    break
-
-            # KẾT THÚC
-            progress_bar.progress(100)
+                progress_bar.progress((i + 1) / batch_size)
+                status_text.text(f"Đang tính toán Seed {seed}...")
             
-            if found_seeds:
-                st.success(f"🎉 TÌM THẤY RỒI! Có {len(found_seeds)} hạt giống khớp với yêu cầu của bạn.")
-                
-                df_res = pd.DataFrame(found_seeds)
-                # Sắp xếp hạt giống nào chuẩn nhất lên đầu
-                df_res['Độ lệch tuyệt đối'] = df_res['Độ lệch'].abs()
-                df_res = df_res.sort_values('Độ lệch tuyệt đối').drop(columns=['Độ lệch tuyệt đối'])
-                
-                st.table(df_res.style.format({
-                    "Seed (Mã số)": "{:.0f}",
-                    "Kết quả ra": "{:,.2f}",
-                    "Độ lệch": "{:+,.2f}"
-                }))
-                
-                best_seed = df_res.iloc[0]['Seed (Mã số)']
-                st.markdown(f"### 👉 Việc cần làm: Quay lên sửa code thành `seed={best_seed}`")
-            else:
-                st.error(f"Đã thử {max_trials} số nhưng chưa trúng. Hãy thử tăng 'Sai số' hoặc tăng 'Số lần thử'.")
+            # Cập nhật vào lịch sử chung
+            new_df = pd.DataFrame(batch_data)
+            st.session_state.scan_history = pd.concat([st.session_state.scan_history, new_df], ignore_index=True)
+            
+            # Tăng biến đếm cho lần sau
+            st.session_state.scan_current_seed = end_seed + 1
+            st.rerun()
 
+    # --- HIỂN THỊ BẢNG KẾT QUẢ ---
+    if not st.session_state.scan_history.empty:
+        st.write("### 📋 Bảng Chi Tiết Các Hạt Giống Đã Chạy")
+        
+        # Tô màu cho đẹp: Dòng nào "ĐẠT" sẽ được bôi xanh
+        def highlight_pass(row):
+            return ['background-color: #d4edda; color: #155724' if row['Trạng thái'] == '✅ ĐẠT' else '' for _ in row]
 
+        # Hiển thị bảng dữ liệu (Sắp xếp Seed tăng dần để bạn dễ theo dõi 0, 1, 2...)
+        df_show = st.session_state.scan_history.sort_values(by='Seed')
+        
+        st.dataframe(df_show.style.apply(highlight_pass, axis=1).format({
+            "Seed": "{:.0f}",
+            "Kết quả": "{:,.2f}",
+            "Độ lệch": "{:+,.2f}"
+        }), use_container_width=True, height=400)
+        
+        # Tổng kết nhanh
+        good_seeds = df_show[df_show['Trạng thái'].str.contains("ĐẠT")]
+        if not good_seeds.empty:
+            best_one = good_seeds.iloc[0]
+            st.success(f"🎉 Đã tìm thấy **{len(good_seeds)}** hạt giống tốt! (Ví dụ Seed **{best_one['Seed']:.0f}** ra {best_one['Kết quả']:,.2f})")
 
 
 
