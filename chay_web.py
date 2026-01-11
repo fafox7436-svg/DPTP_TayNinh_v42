@@ -21,24 +21,27 @@ st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
 # ==============================================================================
 st.markdown("""
 <style>
-    /* 1. Tạo nền Gradient Trắng - Xanh Dương nhạt */
+    /* 1. Nền Gradient: Trắng -> Xanh Dương Đậm Đà Hơn */
     .stApp {
+        background-attachment: fixed;
         background: rgb(255,255,255);
-        background: linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(235,245,255,1) 100%);
+        /* Màu cuối là #cce6ff (Xanh da trời rõ nét) thay vì màu nhạt cũ */
+        background: linear-gradient(180deg, #ffffff 0%, #cce6ff 100%);
     }
 
-    /* 2. Đổi màu chữ tiêu đề thành Xanh Đậm (theo tông màu EVN) */
+    /* 2. Tiêu đề: Xanh Đen (Midnight Blue) - Đậm hơn xanh EVN thường một chút */
     h1, h2, h3, h4 {
-        color: #004b8d !important; /* Xanh EVN */
+        color: #003366 !important; /* Xanh đậm, nhìn rất nét */
         font-family: 'Segoe UI', Tahoma, sans-serif;
+        font-weight: 700;
     }
     
-    /* 3. Chỉnh màu chữ mô tả và nhãn cho đậm hơn chút để dễ đọc trên nền xanh */
-    p, label, .stMarkdown {
-        color: #333333;
+    /* 3. Chỉnh màu chữ nội dung đậm đen để dễ đọc */
+    p, div, label, .stMarkdown {
+        color: #262730;
     }
 
-    /* 4. Thu gọn lề trên cùng (Padding) để bố cục cân đối hơn */
+    /* 4. Tinh chỉnh lề trên */
     .block-container {
         padding-top: 2rem;
         padding-bottom: 5rem;
@@ -465,6 +468,7 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
 
 
 
