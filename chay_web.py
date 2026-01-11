@@ -18,25 +18,22 @@ st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
 # (Các dòng import khác giữ nguyên)
 
 # ==============================================================================
-# TIÊU ĐỀ VÀ LOGO (CĂN GIỮA ĐẸP MẮT)
+# TIÊU ĐỀ VÀ LOGO (CĂN CHỈNH THỦ CÔNG)
 # ==============================================================================
-# Tỷ lệ [7, 2]: Chữ lấy 7 phần, Logo lấy 2 phần (giúp chữ không bị ngắt dòng)
-# vertical_alignment="center": Căn giữa logo và chữ theo chiều dọc
-col1, col2 = st.columns([7, 2], vertical_alignment="center")
+col1, col2 = st.columns([7, 2]) # Tỷ lệ 7 phần chữ - 2 phần logo
 
 with col1:
-    # Dùng markdown để chữ in hoa đậm, không bị khoảng trắng thừa như st.title
-    st.markdown("""
-    <h1 style="margin-top: 0; padding-top: 0;">
-        HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH
-    </h1>
-    """, unsafe_allow_html=True)
+    # Tiêu đề chính
+    st.markdown("# HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH")
 
 with col2:
+    # MẸO: Thêm dòng trống để đẩy logo xuống thấp hơn cho ngang với chữ
+    st.write("") 
+    st.write("") 
     try:
         st.image("image_1.png", use_column_width=True)
     except:
-        st.write("Logo EVN SPC")
+        st.write("Logo")
 
 st.markdown("---")
 
@@ -442,6 +439,7 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
 
 
 
