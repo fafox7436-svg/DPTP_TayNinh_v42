@@ -18,25 +18,26 @@ st.set_page_config(page_title="Dự Báo Phụ Tải", layout="wide")
 # (Các dòng import khác giữ nguyên)
 
 # ==============================================================================
-# TIÊU ĐỀ VÀ LOGO (CĂN CHỈNH THỦ CÔNG)
+# TIÊU ĐỀ VÀ LOGO (FONT NHỎ GỌN & CÂN ĐỐI)
 # ==============================================================================
-col1, col2 = st.columns([7, 2]) # Tỷ lệ 7 phần chữ - 2 phần logo
+# vertical_alignment="center": Để chữ và logo thẳng hàng nhau ở giữa
+col1, col2 = st.columns([8, 2], vertical_alignment="center")
 
 with col1:
-    # Tiêu đề chính
-    st.markdown("# HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH")
+    # Thay st.title bằng html h3 để chữ nhỏ hơn
+    st.markdown("""
+    <h3 style="text-align: left; margin-bottom: 0px;">
+        HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH
+    </h3>
+    """, unsafe_allow_html=True)
 
 with col2:
-    # MẸO: Thêm dòng trống để đẩy logo xuống thấp hơn cho ngang với chữ
-    st.write("") 
-    st.write("") 
     try:
         st.image("image_1.png", use_column_width=True)
     except:
         st.write("Logo")
 
 st.markdown("---")
-
 # --- KIỂM TRA THƯ VIỆN AI ---
 try:
     import google.generativeai as genai
@@ -439,6 +440,7 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
 
 
 
