@@ -14,7 +14,7 @@ import time
 import calendar
 
 # --- CẤU HÌNH ---
-st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
+st.set_page_config(page_title="Dự Báo Phụ Tải", layout="wide")
 # (Các dòng import khác giữ nguyên)
 
 # ==============================================================================
@@ -439,6 +439,7 @@ if f_train and f_input:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
+
 
 
 
