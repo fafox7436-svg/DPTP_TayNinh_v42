@@ -25,18 +25,17 @@ st.markdown("""
     .stApp {
         background-attachment: fixed;
         background: rgb(255,255,255);
-        /* Màu cuối là #cce6ff (Xanh da trời rõ nét) thay vì màu nhạt cũ */
         background: linear-gradient(180deg, #ffffff 0%, #cce6ff 100%);
     }
 
-    /* 2. Tiêu đề: Xanh Đen (Midnight Blue) - Đậm hơn xanh EVN thường một chút */
+    /* 2. Tiêu đề: Xanh Đen */
     h1, h2, h3, h4 {
-        color: #003366 !important; /* Xanh đậm, nhìn rất nét */
+        color: #003366 !important;
         font-family: 'Segoe UI', Tahoma, sans-serif;
         font-weight: 700;
     }
     
-    /* 3. Chỉnh màu chữ nội dung đậm đen để dễ đọc */
+    /* 3. Chỉnh màu chữ nội dung */
     p, div, label, .stMarkdown {
         color: #262730;
     }
@@ -50,13 +49,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# TIÊU ĐỀ VÀ LOGO (ĐÃ CĂN CHỈNH)
+# TIÊU ĐỀ VÀ LOGO
 # ==============================================================================
-# Chia cột tỷ lệ: Chữ 8 phần - Logo 2 phần
 col1, col2 = st.columns([8, 2], vertical_alignment="center")
 
 with col1:
-    # Tiêu đề H3: Vừa vặn, màu xanh (đã định dạng ở trên)
     st.markdown("<h3>HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH</h3>", unsafe_allow_html=True)
 
 with col2:
@@ -66,6 +63,7 @@ with col2:
         st.write("EVN SPC")
 
 st.markdown("---")
+
 # --- KIỂM TRA THƯ VIỆN AI ---
 try:
     import google.generativeai as genai
@@ -94,7 +92,7 @@ DEFAULT_HOLIDAYS = [
     {"Năm": 2025, "Tháng": 5, "Số ngày nghỉ lễ": 1, "Ghi chú": "1/5"},
     {"Năm": 2025, "Tháng": 9, "Số ngày nghỉ lễ": 2, "Ghi chú": "Quốc khánh"},
 
-    {"Năm": 2026, "Tháng": 1, "Số ngày nghỉ lễ": 1, "Ghi chú": "Tết Dương (Ít nghỉ -> Tải cao)"},
+    {"Năm": 2026, "Tháng": 1, "Số ngày nghỉ lễ": 1, "Ghi chú": "Tết Dương"},
     {"Năm": 2026, "Tháng": 2, "Số ngày nghỉ lễ": 5, "Ghi chú": "Tết Bính Ngọ"},
     {"Năm": 2026, "Tháng": 4, "Số ngày nghỉ lễ": 1, "Ghi chú": "Giỗ Tổ"},
     {"Năm": 2026, "Tháng": 5, "Số ngày nghỉ lễ": 2, "Ghi chú": "30/4 - 1/5"},
@@ -110,7 +108,7 @@ def dem_ngay_nghi_cuoi_tuan(year, month):
     return saturdays, sundays
 
 # ==============================================================================
-# 2. MODULE AI (CHỈ ĐÁNH GIÁ, KHÔNG CAN THIỆP)
+# 2. MODULE AI
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -144,8 +142,6 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
 
     try:
         genai.configure(api_key=api_key)
-        
-        # Tự động tìm model
         found_model = "gemini-pro"
         try:
             models = genai.list_models()
@@ -158,7 +154,6 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
         except: pass
         
         model = genai.GenerativeModel(found_model)
-        # Prompt nhấn mạnh việc so sánh với cùng kỳ năm trước
         prompt = (f"Đọc thông tin sau: '{text_data[:3000]}'. "
                   "Hãy đánh giá xem phụ tải điện tháng này sẽ TĂNG hay GIẢM bao nhiêu % so với CÙNG KỲ NĂM TRƯỚC. "
                   "Chỉ đưa ra con số ước lượng dựa trên tác động (thời tiết, kinh tế...). "
@@ -247,10 +242,11 @@ def tao_dac_trung(df, holidays_map):
     return df
 
 # ==============================================================================
-# 3. CHẠY DỰ BÁO (LOGIC CHUẨN NHẤT)
+# 3. CHẠY DỰ BÁO (HÀM GỐC)
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
+    # QUAN TRỌNG: Đã thêm tham số seed vào hàm này để điều khiển ngẫu nhiên
     df_train = tao_dac_trung(df_train.copy(), holidays_map)
     df_input = tao_dac_trung(df_input.copy(), holidays_map)
     
@@ -279,7 +275,7 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     df_pred = df_input.copy()
     X_pred = df_pred[valid_cols].fillna(0)
     
-    # NN (10-15-10)
+    # NN (10-15-10) - QUAN TRỌNG: Sử dụng biến seed ở đây
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', alpha=0.1, max_iter=5000, random_state=seed)
     nn.fit(X_train_scaled, y_train_log)
     pred_nn = np.expm1(nn.predict(scaler.transform(X_pred)))
@@ -291,6 +287,7 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     trend_future = trend_model.predict(df_pred[['Time_Index']])
     y_residual = y_train_log - trend_train
     
+    # RF và XGB có thể cố định hoặc thay đổi seed tùy ý, ở đây cố định 42 cho ổn định
     rf = RandomForestRegressor(n_estimators=200, random_state=42)
     rf.fit(X_train, y_residual)
     
@@ -312,7 +309,7 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     return pred_nn, pred_rf, pred_xg
 
 # ==============================================================================
-# GIAO DIỆN
+# GIAO DIỆN CHÍNH
 # ==============================================================================
 with st.sidebar:
     st.header("⚙️ Cấu Hình")
@@ -320,7 +317,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.write("### 📅 Cập nhật Lịch Nghỉ Lễ")
-    st.info("Nhập số ngày nghỉ vào đây. Mô hình sẽ dùng dữ liệu này để tính toán.")
+    st.info("Nhập số ngày nghỉ vào đây.")
     df_default = pd.DataFrame(DEFAULT_HOLIDAYS)
     edited_df = st.data_editor(df_default, num_rows="dynamic", use_container_width=True)
     USER_HOLIDAYS_MAP = dict(zip(zip(edited_df['Năm'], edited_df['Tháng']), edited_df['Số ngày nghỉ lễ']))
@@ -337,14 +334,14 @@ with col2: f_input = st.file_uploader("2. File Dự Báo (Input)", type=['xlsx',
 st.write("---")
 if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 
-# --- PHẦN QUAN TRỌNG: AI GỢI Ý - BẠN QUYẾT ĐỊNH ---
+# --- AI & CHỐT PHƯƠNG ÁN ---
 st.subheader("1️⃣ Tham khảo AI & Chốt phương án")
 c1, c2 = st.columns([2, 1])
 if 'detected_months' not in st.session_state: st.session_state.detected_months = []
 
 with c1: 
     text_data = st.text_area("Dán link báo hoặc tin tức vào đây:", height=100, 
-                             placeholder="Ví dụ: Dự báo nắng nóng gay gắt tháng tới, nhu cầu điện tăng cao so với cùng kỳ...")
+                             placeholder="Ví dụ: Dự báo nắng nóng gay gắt tháng tới...")
 
 with c2:
     if f_input:
@@ -354,24 +351,20 @@ with c2:
                 st.session_state.detected_months = sorted(list(set(zip(df_temp['Năm'], df_temp['Tháng']))))
         except: pass
     
-    # Nút bấm chạy AI
     if st.button("🤖 AI Phân Tích Ngay"):
         with st.spinner("AI đang đọc và so sánh với cùng kỳ..."):
             val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
-        
-        # Lưu kết quả AI vào session state riêng
         st.session_state.ai_suggestion_val = val
         st.session_state.ai_suggestion_reason = reason
         st.session_state.ai_log = log
 
-    # Hiển thị kết quả AI (Chỉ để tham khảo)
     if 'ai_suggestion_val' in st.session_state:
         if st.session_state.ai_suggestion_val != 0:
             st.success(f"{st.session_state.ai_log}")
-            st.metric(label="AI Đề Xuất (So với cùng kỳ)", value=f"{st.session_state.ai_suggestion_val}%")
-            st.info(f"📝 **Lý do:** {st.session_state.ai_suggestion_reason}")
+            st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
+            st.info(f"📝 {st.session_state.ai_suggestion_reason}")
         else:
-            st.warning("AI không tìm thấy con số cụ thể. Hãy tự nhập.")
+            st.warning("AI không tìm thấy con số.")
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
@@ -384,20 +377,17 @@ if st.session_state.detected_months:
         selected = st.multiselect("Chọn tháng áp dụng:", months_str, default=months_str)
     
     with c_b:
-        # Ô nhập liệu này độc lập hoàn toàn với AI
-        user_val = st.number_input("Nhập % bạn muốn Tăng/Giảm vào kết quả cuối cùng:", 
-                                   value=0.0, step=0.1, help="Số dương là tăng, số âm là giảm")
-        user_note = st.text_input("Ghi chú cho quyết định này:", value="Thủ công")
+        user_val = st.number_input("Nhập % Điều Chỉnh:", value=0.0, step=0.1)
+        user_note = st.text_input("Ghi chú:", value="Thủ công")
     
     if st.button("💾 LƯU QUYẾT ĐỊNH"):
         temp = {}
         for s in selected:
             m = int(s.split('/')[0].replace('Tháng ', ''))
             y = int(s.split('/')[1])
-            # Lưu số của USER nhập, không phải số của AI
             temp[(y, m)] = (user_val, user_note)
         st.session_state.param_dict = temp
-        st.success(f"Đã lưu: {user_val}% cho các tháng đã chọn!")
+        st.success(f"Đã lưu: {user_val}%")
 
 st.write("---")
 
@@ -412,8 +402,8 @@ if f_train and f_input:
                 kiem_tra_chat_luong(df_train, "Lịch Sử")
                 kiem_tra_chat_luong(df_input, "Dự Báo")
                 
-                # Chạy mô hình
-                pred_nn, pred_rf, pred_xg = chay_mo_hinh_goc(df_train, df_input, USER_HOLIDAYS_MAP)
+                # Chạy mô hình mặc định với seed 42
+                pred_nn, pred_rf, pred_xg = chay_mo_hinh_goc(df_train, df_input, USER_HOLIDAYS_MAP, seed=42)
                 
                 res = df_input[['Năm', 'Tháng']].copy()
                 df_check = tao_dac_trung(df_input.copy(), USER_HOLIDAYS_MAP)
@@ -424,15 +414,11 @@ if f_train and f_input:
                 res['Random Forest'] = pred_rf
                 res['XGBoost'] = pred_xg
 
-                # Áp dụng con số của USER
                 def apply_adj(row):
-                    # Lấy % từ dictionary đã lưu
                     param = st.session_state.param_dict.get((row['Năm'], row['Tháng']), (0.0, ""))
                     user_pct = param[0]
                     user_note = param[1]
-                    
                     factor = 1.0 + (user_pct / 100.0)
-                    
                     return row['Neural Network']*factor, row['Random Forest']*factor, row['XGBoost']*factor, user_pct, user_note
 
                 adj_data = res.apply(apply_adj, axis=1, result_type='expand')
@@ -459,9 +445,9 @@ if f_train and f_input:
                 
                 res['Date'] = pd.to_datetime(dict(year=res['Năm'], month=res['Tháng'], day=1))
                 fig, ax = plt.subplots(figsize=(12, 6))
-                ax.plot(res['Date'], res['Neural Network'], 'o-', color='blue', label='NN (10-15-10)')
-                ax.plot(res['Date'], res['Random Forest'], 's--', color='green', label='RF (Detrend)')
-                ax.plot(res['Date'], res['XGBoost'], '^-.', color='purple', label='XGB (Detrend)')
+                ax.plot(res['Date'], res['Neural Network'], 'o-', color='blue', label='NN')
+                ax.plot(res['Date'], res['Random Forest'], 's--', color='green', label='RF')
+                ax.plot(res['Date'], res['XGBoost'], '^-.', color='purple', label='XGB')
                 if 'Thực Tế' in res.columns:
                     mask = res['Thực Tế'].notnull()
                     ax.plot(res.loc[mask, 'Date'], res.loc[mask, 'Thực Tế'], 'ko', label='Thực Tế')
@@ -470,24 +456,24 @@ if f_train and f_input:
                 st.pyplot(fig)
 
 # ==============================================================================
-# 5. MÁY QUÉT CHI TIẾT (PHIÊN BẢN ĐÃ SỬA LỖI HIỂN THỊ)
+# 4. MÁY SOI SEED CHI TIẾT (ĐÃ SỬA LỖI 23 TỶ & LỖI HIỂN THỊ)
 # ==============================================================================
 st.markdown("---")
 st.header("🔬 Máy Soi Seed Chi Tiết")
-st.caption("Chạy và hiển thị kết quả của TẤT CẢ hạt giống (Kể cả Đạt và Không Đạt).")
+st.caption("Chạy và hiển thị kết quả dự báo của THÁNG ĐẦU TIÊN trong file Input.")
 
-# 1. Khởi tạo bộ nhớ (Session State)
+# 1. Khởi tạo
 if 'scan_current_seed' not in st.session_state:
     st.session_state.scan_current_seed = 0
 if 'scan_history' not in st.session_state:
     st.session_state.scan_history = pd.DataFrame()
 
-# 2. Giao diện điều khiển
+# 2. Giao diện
 if f_train and f_input:
-    with st.expander("BẢNG ĐIỀU KHIỂN", expanded=True):
+    with st.expander("BẢNG ĐIỀU KHIỂN SOI SEED", expanded=True):
         c1, c2, c3 = st.columns(3)
         with c1:
-            target_val = st.number_input("Mục tiêu mong muốn", value=737.0, step=1.0)
+            target_val = st.number_input("Mục tiêu mong muốn (Tháng đầu)", value=740000000.0, step=1000000.0, format="%.0f")
         with c2:
             acc = st.slider("Chấp nhận sai số (+/- %)", 0.1, 5.0, 1.0)
         with c3:
@@ -499,20 +485,17 @@ if f_train and f_input:
         start_seed = st.session_state.scan_current_seed
         end_seed = start_seed + batch_size - 1
         
-        st.info(f"📍 Chuẩn bị chạy từ **Seed {start_seed}** đến **Seed {end_seed}**")
+        st.info(f"📍 Đang soi từ **Seed {start_seed}** đến **Seed {end_seed}**")
 
         col_run, col_reset = st.columns([1, 4])
-        
-        # Nút bấm chạy
         run_check = col_run.button(f"▶️ Chạy {start_seed}-{end_seed}")
         
-        # Nút xóa
         if col_reset.button("🗑️ Xóa lịch sử & Về 0"):
             st.session_state.scan_current_seed = 0
             st.session_state.scan_history = pd.DataFrame()
             st.rerun()
 
-    # 3. Xử lý logic (Khi bấm nút)
+    # 3. Xử lý logic
     if run_check:
         df_train_scan = ultra_scan_read_excel(f_train)
         df_input_scan = ultra_scan_read_excel(f_input)
@@ -523,9 +506,11 @@ if f_train and f_input:
         
         for i, seed in enumerate(range(start_seed, end_seed + 1)):
             try:
-                # --- QUAN TRỌNG: Hàm này phải nhận biến seed ---
+                # Chạy mô hình
                 p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=seed)
-                val = np.sum(p_nn)
+                
+                # --- QUAN TRỌNG: CHỈ LẤY THÁNG ĐẦU TIÊN ---
+                val = p_nn[0] 
                 
                 is_pass = limit_min <= val <= limit_max
                 status = "✅ ĐẠT" if is_pass else "❌ Loại"
@@ -537,38 +522,31 @@ if f_train and f_input:
                     "Trạng thái": status
                 })
             except Exception as e:
-                # Nếu lỗi, vẫn ghi vào bảng để biết là lỗi
-                batch_data.append({"Seed": seed, "Kết quả": 0, "Độ lệch": 0, "Trạng thái": f"⚠️ Lỗi code: {str(e)[:20]}"})
+                batch_data.append({"Seed": seed, "Kết quả": 0, "Độ lệch": 0, "Trạng thái": "⚠️ Lỗi"})
             
             progress_bar.progress((i + 1) / batch_size)
             status_text.text(f"Đang tính seed {seed}...")
         
-        # Lưu vào bộ nhớ chung
+        # Lưu và hiển thị
         new_df = pd.DataFrame(batch_data)
         st.session_state.scan_history = pd.concat([st.session_state.scan_history, new_df], ignore_index=True)
         st.session_state.scan_current_seed = end_seed + 1
-        st.rerun() # Tải lại trang để hiện bảng
+        st.rerun()
 
-    # 4. HIỂN THỊ BẢNG (NẰM NGOÀI NÚT BẤM -> LUÔN LUÔN HIỆN)
+    # 4. Hiển thị bảng (Nằm ngoài if run_check để không bị mất khi reload)
     st.write("---")
-    st.subheader("📋 Bảng Kết Quả Chi Tiết")
+    st.subheader("📋 Kết Quả Dự Báo Tháng Đầu Tiên")
     
     if not st.session_state.scan_history.empty:
-        # Sắp xếp theo Seed để dễ nhìn
         df_show = st.session_state.scan_history.sort_values(by='Seed')
         
-        # Tô màu
         def highlight_pass(row):
             if "ĐẠT" in str(row['Trạng thái']):
                 return ['background-color: #d4edda; color: #155724'] * len(row)
-            elif "Lỗi" in str(row['Trạng thái']):
-                return ['background-color: #f8d7da; color: #721c24'] * len(row)
             return [''] * len(row)
 
         st.dataframe(df_show.style.apply(highlight_pass, axis=1).format({
             "Seed": "{:.0f}",
-            "Kết quả": "{:,.2f}",
-            "Độ lệch": "{:+,.2f}"
+            "Kết quả": "{:,.0f}",  
+            "Độ lệch": "{:+,.0f}"
         }), use_container_width=True, height=500)
-    else:
-        st.info("👋 Chưa có dữ liệu. Hãy bấm nút 'Chạy' ở trên.")
