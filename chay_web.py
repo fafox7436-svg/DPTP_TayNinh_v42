@@ -108,7 +108,7 @@ def dem_ngay_nghi_cuoi_tuan(year, month):
     return saturdays, sundays
 
 # ==============================================================================
-# 2. MODULE AI (NÂNG CẤP: SMART MODEL HUNTER)
+# 2. MODULE AI
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -129,68 +129,51 @@ def trich_xuat_so(text):
     except: return 0.0
 
 def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
-    if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", "Thủ công", "None"
-    
+    if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", "Thủ công"
     text_data = input_data
     status = ""
-    
-    # Xử lý link
     if input_data.strip().startswith("http"):
         with st.spinner("Đang đọc bài báo..."):
             extracted, msg = lay_noi_dung_tu_link(input_data)
             if extracted: 
                 text_data = extracted
                 status = msg + "\n"
-            else: return 0.0, msg, "", "Error"
+            else: return 0.0, msg, ""
 
     try:
         genai.configure(api_key=api_key)
+        found_model = "gemini-pro"
+        try:
+            models = genai.list_models()
+            for m in models:
+                if 'generateContent' in m.supported_generation_methods:
+                    if 'flash' in m.name: 
+                        found_model = m.name
+                        break
+                    found_model = m.name
+        except: pass
         
-        # --- THUẬT TOÁN SĂN MODEL (PHIÊN BẢN MỚI) ---
-        all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        if not all_models: return 0.0, "❌ Lỗi Key (Không tìm thấy Model)", "Lỗi", "Error"
-
-        # Hàm chấm điểm: Version càng cao điểm càng lớn
-        def score_model(model_name):
-            score = 0.0
-            name_lower = model_name.lower()
-            versions = re.findall(r'(\d+\.\d+)', name_lower)
-            if versions: score += float(max(versions)) * 1000 
-            if 'ultra' in name_lower: score += 50
-            elif 'pro' in name_lower: score += 30
-            elif 'flash' in name_lower: score += 10
-            elif 'exp' in name_lower: score += 5
-            return score
-
-        # Lấy model điểm cao nhất
-        sorted_models = sorted(all_models, key=score_model, reverse=True)
-        target_model = sorted_models[0]
-        
-        # Tạo tên hiển thị đẹp
-        display_name = target_model.replace("models/", "").upper()
-
-        # Gọi AI
-        model = genai.GenerativeModel(target_model)
-        prompt = (f"Đọc tin: '{text_data[:3000]}'. Xác định % tăng/giảm phụ tải điện. "
-                  "Trả về: SỐ | LÝ DO. Ví dụ: -1.5 | Giảm 1.5%")
+        model = genai.GenerativeModel(found_model)
+        prompt = (f"Đọc thông tin sau: '{text_data[:3000]}'. "
+                  "Hãy đánh giá xem phụ tải điện tháng này sẽ TĂNG hay GIẢM bao nhiêu % so với CÙNG KỲ NĂM TRƯỚC. "
+                  "Chỉ đưa ra con số ước lượng dựa trên tác động (thời tiết, kinh tế...). "
+                  "Trả về định dạng: SỐ | LÝ DO NGẮN GỌN. Ví dụ: +5.5 | Nắng nóng hơn năm ngoái.")
         
         response = model.generate_content(prompt)
         res = response.text.strip()
         
-        # Trả về 4 giá trị
         if "|" in res:
             parts = res.split("|")
             val = trich_xuat_so(parts[0]) 
-            return val, f"{status}✅ Xong!", parts[1].strip(), display_name
+            return val, f"{status}✅ AI Đã xong ({found_model})", parts[1].strip()
             
         val = trich_xuat_so(res)
-        if val != 0.0: return val, f"{status}✅ Xong (Tự bắt số)!", res, display_name
-        return 0.0, "⚠️ Không tìm thấy số", res, display_name
+        if val != 0.0: return val, f"{status}✅ AI Đã xong (Tự bắt số)!", res
+        return 0.0, f"⚠️ AI không tìm thấy số liệu cụ thể.", res
         
     except Exception as e:
-        if "429" in str(e): return 0.0, "⚠️ Hết Quota", "Hết hạn mức", "Error"
-        return 0.0, f"❌ Lỗi: {str(e)[:30]}", "Lỗi", "Error"
+        if "429" in str(e): return 0.0, "⚠️ Hết hạn mức AI.", "Hết Quota"
+        return 0.0, f"❌ Lỗi AI: {str(e)[:50]}...", "Lỗi"
 
 # ==============================================================================
 # 3. XỬ LÝ FILE
@@ -259,7 +242,7 @@ def tao_dac_trung(df, holidays_map):
     return df
 
 # ==============================================================================
-# 4. CHẠY DỰ BÁO (HÀM GỐC)
+# 3. CHẠY DỰ BÁO (HÀM GỐC)
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
@@ -351,7 +334,7 @@ with col2: f_input = st.file_uploader("2. File Dự Báo (Input)", type=['xlsx',
 st.write("---")
 if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 
-# --- AI & CHỐT PHƯƠNG ÁN (CẬP NHẬT HIỆN MODEL) ---
+# --- AI & CHỐT PHƯƠNG ÁN ---
 st.subheader("1️⃣ Tham khảo AI & Chốt phương án")
 c1, c2 = st.columns([2, 1])
 if 'detected_months' not in st.session_state: st.session_state.detected_months = []
@@ -368,37 +351,19 @@ with c2:
                 st.session_state.detected_months = sorted(list(set(zip(df_temp['Năm'], df_temp['Tháng']))))
         except: pass
     
-    # NÚT BẤM AI (ĐÃ SỬA)
     if st.button("🤖 AI Phân Tích Ngay"):
-        with st.spinner("Đang kích hoạt thuật toán săn Model..."):
-            # Gọi hàm trả về 4 giá trị
-            val, log, reason, model_name = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
-            
-            # Lưu session
-            st.session_state.ai_suggestion_val = val
-            st.session_state.ai_suggestion_reason = reason
-            st.session_state.ai_log = log
-            st.session_state.ai_model_name = model_name
+        with st.spinner("AI đang đọc và so sánh với cùng kỳ..."):
+            val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
+        st.session_state.ai_suggestion_val = val
+        st.session_state.ai_suggestion_reason = reason
+        st.session_state.ai_log = log
 
-    # HIỂN THỊ KẾT QUẢ VÀ TÊN MODEL
     if 'ai_suggestion_val' in st.session_state:
-        # In tên model ra
-        current_model = st.session_state.get('ai_model_name', 'Unknown')
-        if current_model not in ['Unknown', 'None', 'Error']:
-            if "PRO" in current_model or "ULTRA" in current_model:
-                st.success(f"🚀 ENGINE: **{current_model}**")
-            else:
-                st.warning(f"⚡ ENGINE: **{current_model}**")
-        elif current_model == 'Error':
-             st.error("❌ Lỗi kết nối AI")
-        
-        # In kết quả
         if st.session_state.ai_suggestion_val != 0:
             st.success(f"{st.session_state.ai_log}")
             st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
             st.info(f"📝 {st.session_state.ai_suggestion_reason}")
         else:
-            if st.session_state.ai_log: st.warning(st.session_state.ai_log)
             st.warning("AI không tìm thấy con số.")
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
@@ -494,7 +459,7 @@ if f_train and f_input:
 # 4. MÁY SOI SEED (PHIÊN BẢN CHỌN ĐƯỢC THÁNG CẦN DỰ BÁO)
 # ==============================================================================
 st.markdown("---")
-st.header("🔬 Find Seed")
+st.header("🔬 Máy Soi Seed Đa Năng")
 st.caption("Chọn chính xác THÁNG bạn muốn đạt mục tiêu để tìm Seed phù hợp.")
 
 # 1. Khởi tạo
@@ -517,13 +482,13 @@ if f_train and f_input:
             col_target, col_val = st.columns(2)
             with col_target:
                 # Cho phép người dùng chọn tháng muốn soi
-                selected_month_str = st.selectbox("🎯 Bạn muốn kiểm tra kết quả của tháng nào?", list_dates, index=len(list_dates)-1)
+                selected_month_str = st.selectbox("🎯 Bạn muốn soi kết quả của tháng nào?", list_dates, index=len(list_dates)-1)
                 # Tìm vị trí (index) của tháng đó trong file
                 target_index = list_dates.index(selected_month_str)
             
             with col_val:
                 target_val = st.number_input(f"Giá trị mong muốn cho {selected_month_str}", 
-                                             value=740000000.0, step=1000000.0, format="%.0f")
+                                           value=740000000.0, step=1000000.0, format="%.0f")
 
             # Các cấu hình phụ
             c1, c2, c3 = st.columns(3)
@@ -532,7 +497,7 @@ if f_train and f_input:
             with c2:
                 acc = st.slider("Sai số cho phép (+/- %)", 0.1, 10.0, 1.0)
             with c3:
-                batch_size = st.number_input("Số lượng seed theo lô", value=20, step=10)
+                batch_size = st.number_input("Số lượng hạt mỗi mẻ", value=20, step=10)
 
             # Tính toán giới hạn
             limit_min = target_val * (1 - acc/100)
@@ -541,10 +506,10 @@ if f_train and f_input:
             start_seed = st.session_state.scan_current_seed
             end_seed = start_seed + batch_size - 1
             
-            st.info(f"📍 Đang kiểm tra **{selected_month_str}** từ Seed {start_seed} đến Seed {end_seed}")
+            st.info(f"📍 Đang soi **{selected_month_str}** từ Seed {start_seed} đến Seed {end_seed}")
 
             col_run, col_reset = st.columns([1, 4])
-            run_check = col_run.button(f"▶️ run {start_seed}-{end_seed}")
+            run_check = col_run.button(f"▶️ Chạy mẻ {start_seed}-{end_seed}")
             
             if col_reset.button("🗑️ Xóa lịch sử & Về 0"):
                 st.session_state.scan_current_seed = 0
@@ -603,7 +568,7 @@ if f_train and f_input:
     # 4. Hiển thị bảng kết quả
     st.write("---")
     if not st.session_state.scan_history.empty:
-        st.subheader("📋 Kết Quả Lọc Seed")
+        st.subheader("📋 Kết Quả Soi Seed")
         df_show = st.session_state.scan_history.sort_values(by='Seed')
         
         def highlight_pass(row):
