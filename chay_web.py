@@ -441,20 +441,28 @@ with c2:
 
     # 3. Hiển thị kết quả (Thêm phần hiển thị Badge Model)
     if 'ai_suggestion_val' in st.session_state:
-        # --- CODE MỚI: HIỂN THỊ TÊN MODEL ---
         current_model = st.session_state.get('ai_model_name', 'Unknown')
-        if current_model != 'Unknown':
+        
+        # Luôn hiển thị trạng thái model để debug
+        if current_model in ['Unknown', 'None', 'Error']:
+            st.error(f"❌ Không dò được Model AI (Trạng thái: {current_model})")
+            st.caption("Kiểm tra lại API Key hoặc cập nhật thư viện google-generativeai")
+        else:
             if "PRO" in current_model or "2.0" in current_model:
-                st.success(f"🚀 Đang chạy trên: **{current_model}**")
+                st.success(f"🚀 ENGINE: **{current_model}**")
+            elif "FLASH" in current_model:
+                st.warning(f"⚡ ENGINE: **{current_model}**")
             else:
-                st.warning(f"⚡ Đang chạy trên: **{current_model}**")
-        # ------------------------------------
+                st.info(f"🤖 ENGINE: **{current_model}**")
 
+        # Hiển thị kết quả số liệu
         if st.session_state.ai_suggestion_val != 0:
             st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
             st.info(f"📝 {st.session_state.ai_suggestion_reason}")
         else:
-            st.warning(f"AI ({current_model}) không tìm thấy con số.")
+            # Nếu val = 0 nhưng có log lỗi thì hiện log
+            if st.session_state.ai_log:
+                st.warning(st.session_state.ai_log)
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
@@ -673,6 +681,7 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
 
 
 
