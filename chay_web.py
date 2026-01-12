@@ -618,6 +618,3 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
-
-# Để giải thích rõ hơn về logic lựa chọn model thông minh (Smart Model Selection),
-# bạn có thể tham khảo sơ đồ dưới đây:
