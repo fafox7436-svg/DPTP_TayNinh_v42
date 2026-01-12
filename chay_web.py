@@ -129,12 +129,13 @@ def trich_xuat_so(text):
     except: return 0.0
 
 def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
+    # Trả về 4 giá trị mặc định khi chưa có key
     if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", "Thủ công", "None"
     
     text_data = input_data
     status = ""
     
-    # Xử lý link
+    # 1. Xử lý link
     if input_data.strip().startswith("http"):
         with st.spinner("Đang đọc bài báo..."):
             extracted, msg = lay_noi_dung_tu_link(input_data)
@@ -146,12 +147,12 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
     try:
         genai.configure(api_key=api_key)
         
-        # --- THUẬT TOÁN SĂN MODEL ---
+        # 2. THUẬT TOÁN SĂN MODEL (Logic chấm điểm)
         all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        if not all_models: return 0.0, "❌ Lỗi Key", "Lỗi", "None"
+        if not all_models:
+            return 0.0, "❌ Lỗi Key (Không thấy model)", "Lỗi", "None"
 
-        # Hàm chấm điểm: Version càng cao điểm càng lớn
         def score_model(model_name):
             score = 0.0
             name_lower = model_name.lower()
@@ -160,15 +161,16 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
             if 'ultra' in name_lower: score += 50
             elif 'pro' in name_lower: score += 30
             elif 'flash' in name_lower: score += 10
-            elif 'exp' in name_lower: score += 5 # Ưu tiên nhẹ cho bản thử nghiệm mới
+            if 'exp' in name_lower: score += 5
             return score
 
-        # Lấy model điểm cao nhất
         sorted_models = sorted(all_models, key=score_model, reverse=True)
         target_model = sorted_models[0]
+        
+        # TẠO TÊN HIỂN THỊ
         display_name = target_model.replace("models/", "").upper()
 
-        # Gọi AI
+        # 3. Gọi AI
         model = genai.GenerativeModel(target_model)
         prompt = (f"Đọc tin: '{text_data[:3000]}'. Xác định % tăng/giảm phụ tải điện. "
                   "Trả về: SỐ | LÝ DO. Ví dụ: -1.5 | Giảm 1.5%")
@@ -176,7 +178,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
         response = model.generate_content(prompt)
         res = response.text.strip()
         
-        # Trả về 4 giá trị (thêm display_name)
+        # Trả về 4 giá trị
         if "|" in res:
             parts = res.split("|")
             val = trich_xuat_so(parts[0]) 
@@ -427,34 +429,39 @@ with c2:
                 st.session_state.detected_months = sorted(list(set(zip(df_temp['Năm'], df_temp['Tháng']))))
         except: pass
     
-# Tìm đoạn này trong code cũ của bạn (thường ở cột bên phải col2)
+# Tìm đoạn st.button("🤖 AI Phân Tích Ngay") cũ và thay bằng đoạn này:
     if st.button("🤖 AI Phân Tích Ngay"):
         with st.spinner("Đang kích hoạt thuật toán săn Model..."):
-            # 1. Gọi hàm mới (Hứng 4 giá trị)
+            # Gọi hàm mới (Hứng 4 giá trị)
             val, log, reason, model_name = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
             
-            # 2. Lưu vào session
+            # Lưu vào session state để dùng sau
             st.session_state.ai_suggestion_val = val
             st.session_state.ai_suggestion_reason = reason
             st.session_state.ai_log = log
-            st.session_state.ai_model_name = model_name # Lưu tên model
+            st.session_state.ai_model_name = model_name 
 
-    # 3. Hiển thị kết quả (Thêm phần hiển thị Badge Model)
+    # HIỂN THỊ KẾT QUẢ (QUAN TRỌNG)
     if 'ai_suggestion_val' in st.session_state:
         current_model = st.session_state.get('ai_model_name', 'Unknown')
         
-        # Luôn hiển thị trạng thái model để debug
-        if current_model in ['Unknown', 'None', 'Error']:
-            st.error(f"❌ Không dò được Model AI (Trạng thái: {current_model})")
-            st.caption("Kiểm tra lại API Key hoặc cập nhật thư viện google-generativeai")
-        else:
-            if "PRO" in current_model or "2.0" in current_model:
+        # In tên model ra màn hình
+        if current_model not in ['Unknown', 'None', 'Error']:
+            if "PRO" in current_model or "ULTRA" in current_model:
                 st.success(f"🚀 ENGINE: **{current_model}**")
-            elif "FLASH" in current_model:
-                st.warning(f"⚡ ENGINE: **{current_model}**")
             else:
-                st.info(f"🤖 ENGINE: **{current_model}**")
+                st.warning(f"⚡ ENGINE: **{current_model}**")
+        elif current_model == 'Error':
+             st.error("❌ Lỗi kết nối AI")
 
+        # In kết quả số liệu
+        if st.session_state.ai_suggestion_val != 0:
+            st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
+            st.info(f"📝 {st.session_state.ai_suggestion_reason}")
+        else:
+            if st.session_state.ai_log:
+                st.warning(st.session_state.ai_log)
+                
         # Hiển thị kết quả số liệu
         if st.session_state.ai_suggestion_val != 0:
             st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
@@ -681,6 +688,7 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
 
 
 
