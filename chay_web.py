@@ -329,8 +329,9 @@ with st.sidebar:
             # Lấy danh sách các model hỗ trợ generateContent
             models_obj = genai.list_models()
             for m in models_obj:
-                if 'generateContent' in m.supported_generation_methods:
-                    available_models.append(m.name)
+    # Chỉ lấy cái nào có chữ 'gemini' để loại bỏ bớt bọn embedding/aqa vớ vẩn
+    if 'generateContent' in m.supported_generation_methods and 'gemini' in m.name:
+        available_models.append(m.name)
             
             # Sắp xếp ưu tiên (Pro lên đầu, Flash xuống dưới)
             def sort_key(name):
@@ -410,11 +411,15 @@ with c2:
             st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
             st.info(f"📝 {st.session_state.ai_suggestion_reason}")
         else:
-            # Hiện cảnh báo nếu AI trả về 0 (có thể do lỗi quota)
+            st.warning("⚠️ AI không bắt được số liệu cụ thể. Dưới đây là câu trả lời gốc:")
+            
+            # --- ĐOẠN MỚI THÊM VÀO ---
+            raw_text = st.session_state.ai_suggestion_reason
+            with st.expander("🔍 Xem nội dung AI trả lời (Debug)", expanded=True):
+                st.code(raw_text, language='text')
+                
             if "Hết Quota" in str(st.session_state.ai_log):
                 st.error(st.session_state.ai_log)
-            else:
-                st.warning("AI không tìm thấy con số.")
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
@@ -633,3 +638,4 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
