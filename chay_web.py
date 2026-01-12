@@ -129,28 +129,66 @@ def trich_xuat_so(text):
     except: return 0.0
 
 def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
-    if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", "Thủ công"
+    if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", "Thủ công", "None"
+    
     text_data = input_data
     status = ""
     
+    # Xử lý link
     if input_data.strip().startswith("http"):
         with st.spinner("Đang đọc bài báo..."):
             extracted, msg = lay_noi_dung_tu_link(input_data)
             if extracted: 
                 text_data = extracted
                 status = msg + "\n"
-            else: return 0.0, msg, ""
+            else: return 0.0, msg, "", "Error"
 
     try:
         genai.configure(api_key=api_key)
         
-        # --- THUẬT TOÁN SĂN MODEL "TƯƠNG LAI" ---
-        
-        # 1. Lấy tất cả model
+        # --- THUẬT TOÁN SĂN MODEL ---
         all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        if not all_models:
-            return 0.0, "❌ API Key này không có quyền truy cập model nào.", "Lỗi Key"
+        if not all_models: return 0.0, "❌ Lỗi Key", "Lỗi", "None"
+
+        # Hàm chấm điểm: Version càng cao điểm càng lớn
+        def score_model(model_name):
+            score = 0.0
+            name_lower = model_name.lower()
+            versions = re.findall(r'(\d+\.\d+)', name_lower)
+            if versions: score += float(max(versions)) * 1000 
+            if 'ultra' in name_lower: score += 50
+            elif 'pro' in name_lower: score += 30
+            elif 'flash' in name_lower: score += 10
+            elif 'exp' in name_lower: score += 5 # Ưu tiên nhẹ cho bản thử nghiệm mới
+            return score
+
+        # Lấy model điểm cao nhất
+        sorted_models = sorted(all_models, key=score_model, reverse=True)
+        target_model = sorted_models[0]
+        display_name = target_model.replace("models/", "").upper()
+
+        # Gọi AI
+        model = genai.GenerativeModel(target_model)
+        prompt = (f"Đọc tin: '{text_data[:3000]}'. Xác định % tăng/giảm phụ tải điện. "
+                  "Trả về: SỐ | LÝ DO. Ví dụ: -1.5 | Giảm 1.5%")
+        
+        response = model.generate_content(prompt)
+        res = response.text.strip()
+        
+        # Trả về 4 giá trị (thêm display_name)
+        if "|" in res:
+            parts = res.split("|")
+            val = trich_xuat_so(parts[0]) 
+            return val, f"{status}✅ Xong!", parts[1].strip(), display_name
+            
+        val = trich_xuat_so(res)
+        if val != 0.0: return val, f"{status}✅ Xong (Tự bắt số)!", res, display_name
+        return 0.0, "⚠️ Không tìm thấy số", res, display_name
+        
+    except Exception as e:
+        if "429" in str(e): return 0.0, "⚠️ Hết Quota", "Hết hạn mức", "Error"
+        return 0.0, f"❌ Lỗi: {str(e)[:30]}", "Lỗi", "Error"
 
         # 2. Hàm chấm điểm Model (Cốt lõi của sự thông minh)
         def score_model(model_name):
@@ -389,20 +427,34 @@ with c2:
                 st.session_state.detected_months = sorted(list(set(zip(df_temp['Năm'], df_temp['Tháng']))))
         except: pass
     
+# Tìm đoạn này trong code cũ của bạn (thường ở cột bên phải col2)
     if st.button("🤖 AI Phân Tích Ngay"):
-        with st.spinner("AI đang đọc và so sánh với cùng kỳ..."):
-            val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
-        st.session_state.ai_suggestion_val = val
-        st.session_state.ai_suggestion_reason = reason
-        st.session_state.ai_log = log
+        with st.spinner("Đang kích hoạt thuật toán săn Model..."):
+            # 1. Gọi hàm mới (Hứng 4 giá trị)
+            val, log, reason, model_name = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
+            
+            # 2. Lưu vào session
+            st.session_state.ai_suggestion_val = val
+            st.session_state.ai_suggestion_reason = reason
+            st.session_state.ai_log = log
+            st.session_state.ai_model_name = model_name # Lưu tên model
 
+    # 3. Hiển thị kết quả (Thêm phần hiển thị Badge Model)
     if 'ai_suggestion_val' in st.session_state:
+        # --- CODE MỚI: HIỂN THỊ TÊN MODEL ---
+        current_model = st.session_state.get('ai_model_name', 'Unknown')
+        if current_model != 'Unknown':
+            if "PRO" in current_model or "2.0" in current_model:
+                st.success(f"🚀 Đang chạy trên: **{current_model}**")
+            else:
+                st.warning(f"⚡ Đang chạy trên: **{current_model}**")
+        # ------------------------------------
+
         if st.session_state.ai_suggestion_val != 0:
-            st.success(f"{st.session_state.ai_log}")
             st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
             st.info(f"📝 {st.session_state.ai_suggestion_reason}")
         else:
-            st.warning("AI không tìm thấy con số.")
+            st.warning(f"AI ({current_model}) không tìm thấy con số.")
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
@@ -621,6 +673,7 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
 
 
 
