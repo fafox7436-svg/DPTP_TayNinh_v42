@@ -132,6 +132,7 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
     if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", "Thủ công"
     text_data = input_data
     status = ""
+    
     if input_data.strip().startswith("http"):
         with st.spinner("Đang đọc bài báo..."):
             extracted, msg = lay_noi_dung_tu_link(input_data)
@@ -142,18 +143,52 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
 
     try:
         genai.configure(api_key=api_key)
-        found_model = "gemini-pro"
-        try:
-            models = genai.list_models()
-            for m in models:
-                if 'generateContent' in m.supported_generation_methods:
-                    if 'flash' in m.name: 
-                        found_model = m.name
-                        break
-                    found_model = m.name
-        except: pass
         
-        model = genai.GenerativeModel(found_model)
+        # --- THUẬT TOÁN SĂN MODEL "TƯƠNG LAI" ---
+        
+        # 1. Lấy tất cả model
+        all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        if not all_models:
+            return 0.0, "❌ API Key này không có quyền truy cập model nào.", "Lỗi Key"
+
+        # 2. Hàm chấm điểm Model (Cốt lõi của sự thông minh)
+        def score_model(model_name):
+            score = 0.0
+            name_lower = model_name.lower()
+            
+            # A. Bắt số phiên bản (1.0, 1.5, 2.0, 2.5...)
+            # Tìm tất cả các số dạng x.x trong tên
+            versions = re.findall(r'(\d+\.\d+)', name_lower)
+            if versions:
+                # Lấy số lớn nhất tìm được (VD: gemini-1.5-pro -> 1.5)
+                # Nhân 1000 để phiên bản là yếu tố quyết định nhất (2.0 luôn thắng 1.5)
+                score += float(max(versions)) * 1000 
+            
+            # B. Cộng điểm hạng cân (Trong cùng 1 version, Pro > Flash)
+            if 'ultra' in name_lower: score += 50   # Ultra xịn nhất
+            elif 'pro' in name_lower: score += 30   # Pro nhì
+            elif 'flash' in name_lower: score += 10 # Flash ba
+            elif 'nano' in name_lower: score += 1
+            
+            # C. Ưu tiên bản chính thức hơn bản thử nghiệm (tùy chọn)
+            # Nếu bạn thích hàng mới nhất (dù là exp), có thể bỏ dòng này hoặc cộng điểm cho exp
+            if 'exp' in name_lower: score += 5 # Cộng nhẹ cho bản experimental vì thường là công nghệ mới
+            
+            return score
+
+        # 3. Sắp xếp danh sách dựa trên điểm số (Cao xuống thấp)
+        # Model nào điểm cao nhất sẽ đứng đầu
+        sorted_models = sorted(all_models, key=score_model, reverse=True)
+        
+        # Lấy cái đứng đầu (King of Models)
+        target_model = sorted_models[0]
+        
+        # --- KẾT THÚC CHỌN ---
+
+        # Gọi model
+        model = genai.GenerativeModel(target_model)
+        
         prompt = (f"Đọc thông tin sau: '{text_data[:3000]}'. "
                   "Hãy đánh giá xem phụ tải điện tháng này sẽ TĂNG hay GIẢM bao nhiêu % so với CÙNG KỲ NĂM TRƯỚC. "
                   "Chỉ đưa ra con số ước lượng dựa trên tác động (thời tiết, kinh tế...). "
@@ -162,17 +197,20 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
         response = model.generate_content(prompt)
         res = response.text.strip()
         
+        # Hiển thị tên model (Bỏ chữ models/ cho đẹp)
+        display_name = target_model.replace("models/", "").upper()
+        
         if "|" in res:
             parts = res.split("|")
             val = trich_xuat_so(parts[0]) 
-            return val, f"{status}✅ AI Đã xong ({found_model})", parts[1].strip()
+            return val, f"{status}✅ Xong! (King: {display_name})", parts[1].strip()
             
         val = trich_xuat_so(res)
-        if val != 0.0: return val, f"{status}✅ AI Đã xong (Tự bắt số)!", res
-        return 0.0, f"⚠️ AI không tìm thấy số liệu cụ thể.", res
+        if val != 0.0: return val, f"{status}✅ Xong ({display_name})!", res
+        return 0.0, f"⚠️ AI ({display_name}) không tìm thấy số liệu.", res
         
     except Exception as e:
-        if "429" in str(e): return 0.0, "⚠️ Hết hạn mức AI.", "Hết Quota"
+        if "429" in str(e): return 0.0, "⚠️ Quá tải (Quota). Chờ xíu nhé.", "Hết Quota"
         return 0.0, f"❌ Lỗi AI: {str(e)[:50]}...", "Lỗi"
 
 # ==============================================================================
@@ -583,6 +621,7 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
 
 
 
