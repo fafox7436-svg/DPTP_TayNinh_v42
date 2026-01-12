@@ -13,11 +13,11 @@ import re
 import time
 import calendar
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Dự Báo Phụ Tải Tây Ninh", layout="wide")
 
 # ==============================================================================
-# 🎨 GIAO DIỆN & CSS (LÀM ĐẸP)
+# 🎨 GIAO DIỆN & CSS (BẢN GỐC CHI TIẾT)
 # ==============================================================================
 st.markdown("""
 <style>
@@ -44,6 +44,13 @@ st.markdown("""
     .block-container {
         padding-top: 2rem;
         padding-bottom: 5rem;
+    }
+    
+    /* 5. Highlight dropdown chọn model */
+    div[data-testid="stSelectbox"] label {
+        color: #d63384 !important;
+        font-weight: bold;
+        font-size: 1.1em;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -108,7 +115,7 @@ def dem_ngay_nghi_cuoi_tuan(year, month):
     return saturdays, sundays
 
 # ==============================================================================
-# 2. MODULE AI
+# 2. MODULE AI (NÂNG CẤP: CHẠY MODEL ĐƯỢC CHỌN)
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -128,10 +135,15 @@ def trich_xuat_so(text):
         return 0.0
     except: return 0.0
 
-def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
+def xu_ly_du_lieu_dinh_tinh(api_key, input_data, target_model_name):
+    """
+    Hàm này bây giờ nhận tham số target_model_name từ bên ngoài truyền vào
+    """
     if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", "Thủ công"
     text_data = input_data
     status = ""
+    
+    # Xử lý link
     if input_data.strip().startswith("http"):
         with st.spinner("Đang đọc bài báo..."):
             extracted, msg = lay_noi_dung_tu_link(input_data)
@@ -142,18 +154,10 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
 
     try:
         genai.configure(api_key=api_key)
-        found_model = "gemini-pro"
-        try:
-            models = genai.list_models()
-            for m in models:
-                if 'generateContent' in m.supported_generation_methods:
-                    if 'flash' in m.name: 
-                        found_model = m.name
-                        break
-                    found_model = m.name
-        except: pass
         
-        model = genai.GenerativeModel(found_model)
+        # --- QUAN TRỌNG: DÙNG ĐÚNG MODEL NGƯỜI DÙNG CHỌN ---
+        model = genai.GenerativeModel(target_model_name)
+        
         prompt = (f"Đọc thông tin sau: '{text_data[:3000]}'. "
                   "Hãy đánh giá xem phụ tải điện tháng này sẽ TĂNG hay GIẢM bao nhiêu % so với CÙNG KỲ NĂM TRƯỚC. "
                   "Chỉ đưa ra con số ước lượng dựa trên tác động (thời tiết, kinh tế...). "
@@ -165,18 +169,18 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data):
         if "|" in res:
             parts = res.split("|")
             val = trich_xuat_so(parts[0]) 
-            return val, f"{status}✅ AI Đã xong ({found_model})", parts[1].strip()
+            return val, f"{status}✅ AI Đã xong ({target_model_name})", parts[1].strip()
             
         val = trich_xuat_so(res)
         if val != 0.0: return val, f"{status}✅ AI Đã xong (Tự bắt số)!", res
-        return 0.0, f"⚠️ AI không tìm thấy số liệu cụ thể.", res
+        return 0.0, f"⚠️ AI ({target_model_name}) không tìm thấy số liệu cụ thể.", res
         
     except Exception as e:
-        if "429" in str(e): return 0.0, "⚠️ Hết hạn mức AI.", "Hết Quota"
+        if "429" in str(e): return 0.0, "⚠️ Hết hạn mức (Quota) cho model này.", "Hết Quota"
         return 0.0, f"❌ Lỗi AI: {str(e)[:50]}...", "Lỗi"
 
 # ==============================================================================
-# 3. XỬ LÝ FILE
+# 3. XỬ LÝ FILE (GIỮ NGUYÊN BẢN GỐC CHI TIẾT)
 # ==============================================================================
 def chuan_hoa_ten_cot(df):
     if df is None: return None
@@ -242,7 +246,7 @@ def tao_dac_trung(df, holidays_map):
     return df
 
 # ==============================================================================
-# 3. CHẠY DỰ BÁO (HÀM GỐC)
+# 4. CHẠY DỰ BÁO (HÀM GỐC)
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
@@ -315,6 +319,41 @@ with st.sidebar:
     st.header("⚙️ Cấu Hình")
     api_key = st.text_input("API Key (Cho AI)", type="password")
     
+    # --- PHẦN MỚI: DANH SÁCH MODEL ---
+    available_models = []
+    selected_model = None
+    
+    if api_key:
+        try:
+            genai.configure(api_key=api_key)
+            # Lấy danh sách các model hỗ trợ generateContent
+            models_obj = genai.list_models()
+            for m in models_obj:
+                if 'generateContent' in m.supported_generation_methods:
+                    available_models.append(m.name)
+            
+            # Sắp xếp ưu tiên (Pro lên đầu, Flash xuống dưới)
+            def sort_key(name):
+                # Điểm số ưu tiên
+                val = 0
+                if 'pro' in name.lower(): val += 100
+                if '1.5' in name: val += 50
+                if 'flash' in name.lower(): val += 10
+                return val
+            
+            available_models.sort(key=sort_key, reverse=True)
+            
+        except Exception as e:
+            st.error("Lỗi Key hoặc mạng!")
+    
+    if available_models:
+        st.success(f"Tìm thấy {len(available_models)} model!")
+        # DROPDOWN ĐỂ BẠN TỰ CHỌN
+        selected_model = st.selectbox("🤖 Chọn Model AI:", available_models, index=0)
+    elif api_key:
+        st.warning("Không tìm thấy model nào.")
+    # ------------------------------------
+    
     st.markdown("---")
     st.write("### 📅 Cập nhật Lịch Nghỉ Lễ")
     st.info("Nhập số ngày nghỉ vào đây.")
@@ -323,6 +362,7 @@ with st.sidebar:
     USER_HOLIDAYS_MAP = dict(zip(zip(edited_df['Năm'], edited_df['Tháng']), edited_df['Số ngày nghỉ lễ']))
     
     st.markdown("---")
+    seed_val = st.number_input("Random Seed", value=42)
     if st.button("🗑️ Xóa Cache & Reset"):
         st.cache_data.clear()
         st.rerun()
@@ -351,12 +391,18 @@ with c2:
                 st.session_state.detected_months = sorted(list(set(zip(df_temp['Năm'], df_temp['Tháng']))))
         except: pass
     
-    if st.button("🤖 AI Phân Tích Ngay"):
-        with st.spinner("AI đang đọc và so sánh với cùng kỳ..."):
-            val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data)
-        st.session_state.ai_suggestion_val = val
-        st.session_state.ai_suggestion_reason = reason
-        st.session_state.ai_log = log
+    # Nút bấm chạy AI
+    if st.button("🤖 AI Phân Tích Ngay", disabled=not selected_model):
+        if not selected_model:
+            st.error("Chưa chọn model!")
+        else:
+            with st.spinner(f"Đang hỏi {selected_model}..."):
+                # TRUYỀN MODEL ĐÃ CHỌN VÀO HÀM
+                val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data, selected_model)
+                
+            st.session_state.ai_suggestion_val = val
+            st.session_state.ai_suggestion_reason = reason
+            st.session_state.ai_log = log
 
     if 'ai_suggestion_val' in st.session_state:
         if st.session_state.ai_suggestion_val != 0:
@@ -364,7 +410,11 @@ with c2:
             st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
             st.info(f"📝 {st.session_state.ai_suggestion_reason}")
         else:
-            st.warning("AI không tìm thấy con số.")
+            # Hiện cảnh báo nếu AI trả về 0 (có thể do lỗi quota)
+            if "Hết Quota" in str(st.session_state.ai_log):
+                st.error(st.session_state.ai_log)
+            else:
+                st.warning("AI không tìm thấy con số.")
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
@@ -402,8 +452,8 @@ if f_train and f_input:
                 kiem_tra_chat_luong(df_train, "Lịch Sử")
                 kiem_tra_chat_luong(df_input, "Dự Báo")
                 
-                # Chạy mô hình mặc định với seed 42
-                pred_nn, pred_rf, pred_xg = chay_mo_hinh_goc(df_train, df_input, USER_HOLIDAYS_MAP, seed=42)
+                # Chạy mô hình mặc định với seed
+                pred_nn, pred_rf, pred_xg = chay_mo_hinh_goc(df_train, df_input, USER_HOLIDAYS_MAP, seed_val)
                 
                 res = df_input[['Năm', 'Tháng']].copy()
                 df_check = tao_dac_trung(df_input.copy(), USER_HOLIDAYS_MAP)
@@ -459,7 +509,7 @@ if f_train and f_input:
 # 4. MÁY SOI SEED (PHIÊN BẢN CHỌN ĐƯỢC THÁNG CẦN DỰ BÁO)
 # ==============================================================================
 st.markdown("---")
-st.header("🔬 Check seed")
+st.header("🔬 Find Seed")
 st.caption("Chọn chính xác THÁNG bạn muốn đạt mục tiêu để tìm Seed phù hợp.")
 
 # 1. Khởi tạo
@@ -488,7 +538,7 @@ if f_train and f_input:
             
             with col_val:
                 target_val = st.number_input(f"Giá trị mong muốn cho {selected_month_str}", 
-                                           value=740000000.0, step=1000000.0, format="%.0f")
+                                             value=740000000.0, step=1000000.0, format="%.0f")
 
             # Các cấu hình phụ
             c1, c2, c3 = st.columns(3)
@@ -497,7 +547,7 @@ if f_train and f_input:
             with c2:
                 acc = st.slider("Sai số cho phép (+/- %)", 0.1, 10.0, 1.0)
             with c3:
-                batch_size = st.number_input("Số lượng seed mỗi lô", value=20, step=10)
+                batch_size = st.number_input("Số lượng seed theo lô", value=20, step=10)
 
             # Tính toán giới hạn
             limit_min = target_val * (1 - acc/100)
@@ -506,10 +556,10 @@ if f_train and f_input:
             start_seed = st.session_state.scan_current_seed
             end_seed = start_seed + batch_size - 1
             
-            st.info(f"📍 Đang soi **{selected_month_str}** từ Seed {start_seed} đến Seed {end_seed}")
+            st.info(f"📍 Đang kiểm tra **{selected_month_str}** từ Seed {start_seed} đến Seed {end_seed}")
 
             col_run, col_reset = st.columns([1, 4])
-            run_check = col_run.button(f"▶️ Chạy theo lô {start_seed}-{end_seed}")
+            run_check = col_run.button(f"▶️ run {start_seed}-{end_seed}")
             
             if col_reset.button("🗑️ Xóa lịch sử & Về 0"):
                 st.session_state.scan_current_seed = 0
@@ -568,7 +618,7 @@ if f_train and f_input:
     # 4. Hiển thị bảng kết quả
     st.write("---")
     if not st.session_state.scan_history.empty:
-        st.subheader("📋 Kết Quả Check Seed")
+        st.subheader("📋 Kết Quả Lọc Seed")
         df_show = st.session_state.scan_history.sort_values(by='Seed')
         
         def highlight_pass(row):
@@ -583,4 +633,3 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
-
