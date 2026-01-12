@@ -459,7 +459,7 @@ if f_train and f_input:
 # 4. MÁY SOI SEED (PHIÊN BẢN CHỌN ĐƯỢC THÁNG CẦN DỰ BÁO)
 # ==============================================================================
 st.markdown("---")
-st.header("🔬 Máy Soi Seed Đa Năng")
+st.header("🔬 Find Seed")
 st.caption("Chọn chính xác THÁNG bạn muốn đạt mục tiêu để tìm Seed phù hợp.")
 
 # 1. Khởi tạo
@@ -509,7 +509,7 @@ if f_train and f_input:
             st.info(f"📍 Đang soi **{selected_month_str}** từ Seed {start_seed} đến Seed {end_seed}")
 
             col_run, col_reset = st.columns([1, 4])
-            run_check = col_run.button(f"▶️ Chạy mẻ {start_seed}-{end_seed}")
+            run_check = col_run.button(f"▶️ run {start_seed}-{end_seed}")
             
             if col_reset.button("🗑️ Xóa lịch sử & Về 0"):
                 st.session_state.scan_current_seed = 0
@@ -583,4 +583,5 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
 
