@@ -482,7 +482,7 @@ if f_train and f_input:
             col_target, col_val = st.columns(2)
             with col_target:
                 # Cho phép người dùng chọn tháng muốn soi
-                selected_month_str = st.selectbox("🎯 Bạn muốn soi kết quả của tháng nào?", list_dates, index=len(list_dates)-1)
+                selected_month_str = st.selectbox("🎯 Bạn muốn kiểm tra kết quả của tháng nào?", list_dates, index=len(list_dates)-1)
                 # Tìm vị trí (index) của tháng đó trong file
                 target_index = list_dates.index(selected_month_str)
             
@@ -497,7 +497,7 @@ if f_train and f_input:
             with c2:
                 acc = st.slider("Sai số cho phép (+/- %)", 0.1, 10.0, 1.0)
             with c3:
-                batch_size = st.number_input("Số lượng hạt mỗi mẻ", value=20, step=10)
+                batch_size = st.number_input("Số lượng seed theo lô", value=20, step=10)
 
             # Tính toán giới hạn
             limit_min = target_val * (1 - acc/100)
@@ -506,7 +506,7 @@ if f_train and f_input:
             start_seed = st.session_state.scan_current_seed
             end_seed = start_seed + batch_size - 1
             
-            st.info(f"📍 Đang soi **{selected_month_str}** từ Seed {start_seed} đến Seed {end_seed}")
+            st.info(f"📍 Đang kiểm tra **{selected_month_str}** từ Seed {start_seed} đến Seed {end_seed}")
 
             col_run, col_reset = st.columns([1, 4])
             run_check = col_run.button(f"▶️ run {start_seed}-{end_seed}")
@@ -568,7 +568,7 @@ if f_train and f_input:
     # 4. Hiển thị bảng kết quả
     st.write("---")
     if not st.session_state.scan_history.empty:
-        st.subheader("📋 Kết Quả Soi Seed")
+        st.subheader("📋 Kết Quả Lọc Seed")
         df_show = st.session_state.scan_history.sort_values(by='Seed')
         
         def highlight_pass(row):
@@ -583,5 +583,6 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
 
 
