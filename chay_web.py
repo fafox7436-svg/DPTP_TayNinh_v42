@@ -193,20 +193,23 @@ def tao_dac_trung(df, holidays_map):
     return df
 
 # ==============================================================================
-# 4. CHẠY DỰ BÁO
-# ==============================================================================
+# Thay thế toàn bộ hàm này trong code của bạn
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
+    # 1. Feature Engineering (Giữ nguyên)
     df_train = tao_dac_trung(df_train.copy(), holidays_map)
     df_input = tao_dac_trung(df_input.copy(), holidays_map)
+    
     start_year = df_train['Năm'].min()
     def create_time_index(row): return (row['Năm'] - start_year) * 12 + row['Tháng']
+    
     df_train['Time_Index'] = df_train.apply(create_time_index, axis=1)
     df_input['Time_Index'] = df_input.apply(create_time_index, axis=1)
 
     features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 
                 'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
                 'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh']
+    
     valid_cols = [c for c in features if c in df_train.columns and c in df_input.columns]
     target = 'Tổng thương phẩm'
     
@@ -214,16 +217,21 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     X_train = data_train[valid_cols]
     y_train = data_train[target]
     
+    # 2. Train Models (Giữ nguyên)
     y_train_log = np.log1p(y_train)
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
+    
     df_pred = df_input.copy()
     X_pred = df_pred[valid_cols].fillna(0)
     
-    nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', alpha=0.1, max_iter=5000, random_state=seed)
+    # Neural Network
+    nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', 
+                      alpha=0.1, max_iter=5000, random_state=seed)
     nn.fit(X_train_scaled, y_train_log)
-    pred_nn = np.expm1(nn.predict(scaler.transform(X_pred)))
+    pred_nn_log = nn.predict(scaler.transform(X_pred))
     
+    # Random Forest & XGBoost (Detrending)
     trend_model = LinearRegression()
     trend_model.fit(data_train[['Time_Index']], y_train_log)
     trend_future = trend_model.predict(df_pred[['Time_Index']])
@@ -231,12 +239,41 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     
     rf = RandomForestRegressor(n_estimators=200, random_state=42)
     rf.fit(X_train, y_residual)
+    
     xg = xgb.XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=4, reg_alpha=0.1, random_state=42)
     xg.fit(X_train, y_residual)
     
-    pred_rf = np.expm1(rf.predict(X_pred) + trend_future)
-    pred_xg = np.expm1(xg.predict(X_pred) + trend_future)
+    pred_rf_log = rf.predict(X_pred) + trend_future
+    pred_xg_log = xg.predict(X_pred) + trend_future
     
+    # Chuyển về số thực
+    pred_nn = np.expm1(pred_nn_log)
+    pred_rf = np.expm1(pred_rf_log)
+    pred_xg = np.expm1(pred_xg_log)
+    
+    # ==========================================================================
+    # 3. LOGIC ĐIỀU CHỈNH NGÀY NGHỈ (LOGIC MỚI - KHOA HỌC HƠN)
+    # ==========================================================================
+    
+    # Lấy số ngày nghỉ lễ từ dữ liệu đầu vào
+    ngay_le = df_pred['So_Ngay_Le_Tet'].values
+    
+    # MỨC GIẢM MỖI NGÀY (IMPACT FACTOR)
+    # 1.8% là con số hợp lý: 1 ngày nghỉ làm mất ~50% sản lượng của ngày đó (1/30 * 0.5 = 1.67%)
+    # Cộng thêm hiệu ứng quán tính (trước/sau tết) -> Chọn 1.8%
+    muc_giam_moi_ngay = 0.018 
+    
+    # Tính hệ số phạt cho từng tháng
+    # Ví dụ: 5 ngày nghỉ -> he_so = 1 - (5 * 0.018) = 0.91
+    # Ví dụ: 0 ngày nghỉ -> he_so = 1 - 0 = 1.0 (Giữ nguyên)
+    he_so_dieu_chinh = 1.0 - (ngay_le * muc_giam_moi_ngay)
+    
+    # Áp dụng hệ số vào kết quả
+    pred_nn = pred_nn * he_so_dieu_chinh
+    pred_rf = pred_rf * he_so_dieu_chinh
+    pred_xg = pred_xg * he_so_dieu_chinh
+    
+    # Vẫn giữ luật giảm nhẹ cho tháng 1 (tháng sau tết dương) nếu cần
     is_jan = df_pred['Tháng'] == 1
     if is_jan.any():
         pred_rf[is_jan] *= 0.995 
@@ -561,3 +598,4 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
