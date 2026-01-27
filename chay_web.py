@@ -257,20 +257,6 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     # ==========================================================================
     # LOGIC ĐIỀU CHỈNH NGÀY NGHỈ (Weighted Days: -1.8% mỗi ngày nghỉ)
     # ==========================================================================
-    ngay_le = df_pred['So_Ngay_Le_Tet'].values
-    muc_giam_moi_ngay = 0.018 
-    he_so_dieu_chinh = 1.0 - (ngay_le * muc_giam_moi_ngay)
-    
-    pred_nn = pred_nn * he_so_dieu_chinh
-    pred_rf = pred_rf * he_so_dieu_chinh
-    pred_xg = pred_xg * he_so_dieu_chinh
-    
-    # Luật tháng 1
-    is_jan = df_pred['Tháng'] == 1
-    if is_jan.any():
-        pred_rf[is_jan] *= 0.995 
-        pred_xg[is_jan] *= 0.995
-
     return pred_nn, pred_rf, pred_xg
 
 # ==============================================================================
@@ -586,3 +572,4 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
