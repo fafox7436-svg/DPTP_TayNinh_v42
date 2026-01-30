@@ -222,52 +222,66 @@ def tao_dac_trung(df, holidays_map):
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
-    # Gọi hàm tạo đặc trưng đã sửa ở trên
-    df_train = tao_dac_trung(df_train.copy(), holidays_map)
-    df_input = tao_dac_trung(df_input.copy(), holidays_map)
+    # ==========================================================================
+    # BƯỚC 1: GỘP DATA ĐỂ TÍNH LAG KHÔNG BỊ ĐỨT QUÃNG
+    # ==========================================================================
+    # Đánh dấu để lát nữa tách ra
+    df_train['is_train'] = True
+    df_input['is_train'] = False
     
-    start_year = df_train['Năm'].min()
+    # Gộp lại
+    df_combined = pd.concat([df_train, df_input], ignore_index=True)
+    
+    # Tính đặc trưng trên tổng thể (Lúc này Input sẽ nhìn thấy được Train cũ)
+    df_combined = tao_dac_trung(df_combined, holidays_map)
+    
+    # Tách ra lại
+    df_train_processed = df_combined[df_combined['is_train'] == True].copy()
+    df_input_processed = df_combined[df_combined['is_train'] == False].copy()
+    
+    # ==========================================================================
+    # BƯỚC 2: CHUẨN BỊ DATA TRAIN
+    # ==========================================================================
+    start_year = df_train_processed['Năm'].min()
     def create_time_index(row): return (row['Năm'] - start_year) * 12 + row['Tháng']
     
-    df_train['Time_Index'] = df_train.apply(create_time_index, axis=1)
-    df_input['Time_Index'] = df_input.apply(create_time_index, axis=1)
+    df_train_processed['Time_Index'] = df_train_processed.apply(create_time_index, axis=1)
+    df_input_processed['Time_Index'] = df_input_processed.apply(create_time_index, axis=1)
 
-    # --- CẬP NHẬT DANH SÁCH FEATURES ---
     features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 
                 'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
                 'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh',
-                'Lag_1', 'Lag_12'] # <--- ĐÃ THÊM 2 CỘT NÀY
-    # -----------------------------------
+                'Lag_1', 'Lag_12']
     
-    valid_cols = [c for c in features if c in df_train.columns and c in df_input.columns]
+    valid_cols = [c for c in features if c in df_train_processed.columns]
     target = 'Tổng thương phẩm'
     
-    # ... (Phần còn lại giữ nguyên không đổi) ...
-    data_train = df_train.dropna(subset=valid_cols + [target])
+    # Lọc bỏ các dòng NaN do Lag sinh ra ở đoạn đầu file Train
+    data_train = df_train_processed.dropna(subset=valid_cols + [target])
+    
     X_train = data_train[valid_cols]
     y_train = data_train[target]
-
-    # ... (Giữ nguyên đoạn code train model bên dưới) ...
-    # Copy lại đoạn code train cũ của bạn vào đây
     
-    # Train Models
+    # ==========================================================================
+    # BƯỚC 3: TRAINING
+    # ==========================================================================
     y_train_log = np.log1p(y_train)
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     
-    df_pred = df_input.copy()
-    X_pred = df_pred[valid_cols].fillna(0)
+    # Xử lý input
+    X_pred = df_input_processed[valid_cols].fillna(0) # Fill 0 phòng hờ, nhưng nhờ bước gộp nên sẽ ít bị 0 hơn
     
     # 1. Neural Network
-    nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', 
-                      alpha=0.1, max_iter=5000, random_state=seed)
+    nn = MLPRegressor(hidden_layer_sizes=(50, 50), activation='relu', solver='lbfgs', 
+                      alpha=0.001, max_iter=5000, random_state=seed) # Đã tăng node lên xíu cho mạnh
     nn.fit(X_train_scaled, y_train_log)
     pred_nn_log = nn.predict(scaler.transform(X_pred))
     
-    # 2. Detrending
+    # 2. Detrending (Cho RF và XGB)
     trend_model = LinearRegression()
     trend_model.fit(data_train[['Time_Index']], y_train_log)
-    trend_future = trend_model.predict(df_pred[['Time_Index']])
+    trend_future = trend_model.predict(df_input_processed[['Time_Index']])
     y_residual = y_train_log - trend_model.predict(data_train[['Time_Index']])
     
     # 3. Random Forest
@@ -275,13 +289,14 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     rf.fit(X_train, y_residual)
     
     # 4. XGBoost
-    xg = xgb.XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=4, 
+    xg = xgb.XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=5, 
                           reg_alpha=0.1, random_state=seed)
     xg.fit(X_train, y_residual)
     
     pred_rf_log = rf.predict(X_pred) + trend_future
     pred_xg_log = xg.predict(X_pred) + trend_future
     
+    # Chuyển về số thực
     pred_nn = np.expm1(pred_nn_log)
     pred_rf = np.expm1(pred_rf_log)
     pred_xg = np.expm1(pred_xg_log)
@@ -600,6 +615,7 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
 
 
 
