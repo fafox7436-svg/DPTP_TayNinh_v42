@@ -180,74 +180,68 @@ def kiem_tra_chat_luong(df, ten_file):
         for e in errors: st.write(e)
         st.stop()
 
-# --- SỬA HÀM TẠO ĐẶC TRƯNG ---
+# ==============================================================================
+# HÀM TẠO ĐẶC TRƯNG MỚI (FIX LỖI LAG VÀ HÀM CON)
+# ==============================================================================
 def tao_dac_trung(df, holidays_map):
-    # 1. Sắp xếp dữ liệu theo thời gian để tính Lag cho đúng
+    # Sắp xếp để tính lag cho đúng
     df = df.sort_values(by=['Năm', 'Tháng'])
 
-    # 2. Tạo đặc trưng Mùa
+    # 1. Đặc trưng Mùa
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
     
-    # --- ĐỊNH NGHĨA HÀM CON Ở ĐÂY ĐỂ TRÁNH LỖI "NOT DEFINED" ---
+    # 2. Đặc trưng Ngày nghỉ (Định nghĩa hàm con ngay trong đây để tránh lỗi)
     def get_calendar_info(row):
         y, m = int(row['Năm']), int(row['Tháng'])
-        t7, cn = dem_ngay_nghi_cuoi_tuan(y, m) # Hàm này đã có ở global
+        t7, cn = dem_ngay_nghi_cuoi_tuan(y, m)
         le_tet = holidays_map.get((y, m), 0)
         return pd.Series([t7, cn, le_tet])
-    # -----------------------------------------------------------
 
-    # 3. Áp dụng hàm con
     df[['So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet']] = df.apply(get_calendar_info, axis=1)
     
-    # 4. TẠO BIẾN TRỄ (LAG FEATURES)
-    # Lưu ý: Nếu cột 'Tổng thương phẩm' chưa có (file input), nó sẽ sinh ra NaN
+    # 3. TẠO BIẾN TRỄ (LAG) - TỰ ĐỘNG
+    # Nếu cột Tổng thương phẩm tồn tại thì mới shift được
     if 'Tổng thương phẩm' in df.columns:
         df['Lag_1'] = df['Tổng thương phẩm'].shift(1)   # Tháng trước
         df['Lag_12'] = df['Tổng thương phẩm'].shift(12) # Cùng kỳ năm ngoái
     else:
-        # Xử lý cho file Input nếu không có cột sản lượng (để tránh lỗi code)
         df['Lag_1'] = 0
         df['Lag_12'] = 0
 
-    # 5. Xử lý dữ liệu trống (NaN) do hàm shift sinh ra
-    # (Dùng backfill để lấp đầy mấy tháng đầu tiên bị trống)
+    # Lấp đầy các giá trị NaN sinh ra do shift (dùng giá trị gần nhất phía sau)
     df = df.fillna(method='bfill').fillna(0)
     
     df['Bien_Ngoai_Sinh'] = 0
     return df
 
 # ==============================================================================
-# 4. CHẠY DỰ BÁO (UPDATE: Random Seed cho tất cả + Logic Tết)
+# 4. CHẠY DỰ BÁO (UPDATE: Gộp Data để sửa lỗi Neural Network bị tụt)
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
-    # ==========================================================================
-    # BƯỚC 1: GỘP DATA ĐỂ TÍNH LAG KHÔNG BỊ ĐỨT QUÃNG
-    # ==========================================================================
-    # Đánh dấu để lát nữa tách ra
+    # --- BƯỚC 1: GỘP DATA ĐỂ TÍNH LAG KHÔNG BỊ ĐỨT QUÃNG ---
     df_train['is_train'] = True
     df_input['is_train'] = False
     
     # Gộp lại
     df_combined = pd.concat([df_train, df_input], ignore_index=True)
     
-    # Tính đặc trưng trên tổng thể (Lúc này Input sẽ nhìn thấy được Train cũ)
+    # Tính đặc trưng trên tổng thể (Lúc này Input sẽ lấy được dữ liệu quá khứ từ Train)
     df_combined = tao_dac_trung(df_combined, holidays_map)
     
     # Tách ra lại
     df_train_processed = df_combined[df_combined['is_train'] == True].copy()
     df_input_processed = df_combined[df_combined['is_train'] == False].copy()
     
-    # ==========================================================================
-    # BƯỚC 2: CHUẨN BỊ DATA TRAIN
-    # ==========================================================================
+    # --- BƯỚC 2: CHUẨN BỊ DATA TRAIN ---
     start_year = df_train_processed['Năm'].min()
     def create_time_index(row): return (row['Năm'] - start_year) * 12 + row['Tháng']
     
     df_train_processed['Time_Index'] = df_train_processed.apply(create_time_index, axis=1)
     df_input_processed['Time_Index'] = df_input_processed.apply(create_time_index, axis=1)
 
+    # Danh sách features (đã bao gồm Lag)
     features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 
                 'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
                 'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh',
@@ -256,25 +250,23 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     valid_cols = [c for c in features if c in df_train_processed.columns]
     target = 'Tổng thương phẩm'
     
-    # Lọc bỏ các dòng NaN do Lag sinh ra ở đoạn đầu file Train
+    # Lọc bỏ các dòng NaN ở đầu file train (do không có quá khứ để shift)
     data_train = df_train_processed.dropna(subset=valid_cols + [target])
     
     X_train = data_train[valid_cols]
     y_train = data_train[target]
     
-    # ==========================================================================
-    # BƯỚC 3: TRAINING
-    # ==========================================================================
+    # --- BƯỚC 3: TRAINING ---
     y_train_log = np.log1p(y_train)
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     
     # Xử lý input
-    X_pred = df_input_processed[valid_cols].fillna(0) # Fill 0 phòng hờ, nhưng nhờ bước gộp nên sẽ ít bị 0 hơn
+    X_pred = df_input_processed[valid_cols].fillna(0)
     
     # 1. Neural Network
     nn = MLPRegressor(hidden_layer_sizes=(50, 50), activation='relu', solver='lbfgs', 
-                      alpha=0.001, max_iter=5000, random_state=seed) # Đã tăng node lên xíu cho mạnh
+                      alpha=0.001, max_iter=5000, random_state=seed)
     nn.fit(X_train_scaled, y_train_log)
     pred_nn_log = nn.predict(scaler.transform(X_pred))
     
@@ -302,6 +294,7 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     pred_xg = np.expm1(pred_xg_log)
     
     return pred_nn, pred_rf, pred_xg
+
 # ==============================================================================
 # GIAO DIỆN CHÍNH
 # ==============================================================================
@@ -615,7 +608,3 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
-
-
-
-
