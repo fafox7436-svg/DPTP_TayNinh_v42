@@ -180,100 +180,60 @@ def kiem_tra_chat_luong(df, ten_file):
         for e in errors: st.write(e)
         st.stop()
 
-# ==============================================================================
-# HÀM TẠO ĐẶC TRƯNG MỚI (FIX LỖI LAG VÀ HÀM CON)
-# ==============================================================================
 def tao_dac_trung(df, holidays_map):
-    # Sắp xếp để tính lag cho đúng
-    df = df.sort_values(by=['Năm', 'Tháng'])
-
-    # 1. Đặc trưng Mùa
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
-    
-    # 2. Đặc trưng Ngày nghỉ (Định nghĩa hàm con ngay trong đây để tránh lỗi)
     def get_calendar_info(row):
         y, m = int(row['Năm']), int(row['Tháng'])
         t7, cn = dem_ngay_nghi_cuoi_tuan(y, m)
         le_tet = holidays_map.get((y, m), 0)
         return pd.Series([t7, cn, le_tet])
-
     df[['So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet']] = df.apply(get_calendar_info, axis=1)
-    
-    # 3. TẠO BIẾN TRỄ (LAG) - TỰ ĐỘNG
-    # Nếu cột Tổng thương phẩm tồn tại thì mới shift được
-    if 'Tổng thương phẩm' in df.columns:
-        df['Lag_1'] = df['Tổng thương phẩm'].shift(1)   # Tháng trước
-        df['Lag_12'] = df['Tổng thương phẩm'].shift(12) # Cùng kỳ năm ngoái
-    else:
-        df['Lag_1'] = 0
-        df['Lag_12'] = 0
-
-    # Lấp đầy các giá trị NaN sinh ra do shift (dùng giá trị gần nhất phía sau)
-    df = df.fillna(method='bfill').fillna(0)
-    
     df['Bien_Ngoai_Sinh'] = 0
     return df
 
 # ==============================================================================
-# 4. CHẠY DỰ BÁO (UPDATE: Gộp Data để sửa lỗi Neural Network bị tụt)
+# 4. CHẠY DỰ BÁO
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
-    # --- BƯỚC 1: GỘP DATA ĐỂ TÍNH LAG KHÔNG BỊ ĐỨT QUÃNG ---
-    df_train['is_train'] = True
-    df_input['is_train'] = False
+    df_train = tao_dac_trung(df_train.copy(), holidays_map)
+    df_input = tao_dac_trung(df_input.copy(), holidays_map)
     
-    # Gộp lại
-    df_combined = pd.concat([df_train, df_input], ignore_index=True)
-    
-    # Tính đặc trưng trên tổng thể (Lúc này Input sẽ lấy được dữ liệu quá khứ từ Train)
-    df_combined = tao_dac_trung(df_combined, holidays_map)
-    
-    # Tách ra lại
-    df_train_processed = df_combined[df_combined['is_train'] == True].copy()
-    df_input_processed = df_combined[df_combined['is_train'] == False].copy()
-    
-    # --- BƯỚC 2: CHUẨN BỊ DATA TRAIN ---
-    start_year = df_train_processed['Năm'].min()
+    start_year = df_train['Năm'].min()
     def create_time_index(row): return (row['Năm'] - start_year) * 12 + row['Tháng']
     
-    df_train_processed['Time_Index'] = df_train_processed.apply(create_time_index, axis=1)
-    df_input_processed['Time_Index'] = df_input_processed.apply(create_time_index, axis=1)
+    df_train['Time_Index'] = df_train.apply(create_time_index, axis=1)
+    df_input['Time_Index'] = df_input.apply(create_time_index, axis=1)
 
-    # Danh sách features (đã bao gồm Lag)
     features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 
                 'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
-                'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh',
-                'Lag_1', 'Lag_12']
+                'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh']
     
-    valid_cols = [c for c in features if c in df_train_processed.columns]
+    valid_cols = [c for c in features if c in df_train.columns and c in df_input.columns]
     target = 'Tổng thương phẩm'
     
-    # Lọc bỏ các dòng NaN ở đầu file train (do không có quá khứ để shift)
-    data_train = df_train_processed.dropna(subset=valid_cols + [target])
-    
+    data_train = df_train.dropna(subset=valid_cols + [target])
     X_train = data_train[valid_cols]
     y_train = data_train[target]
     
-    # --- BƯỚC 3: TRAINING ---
     y_train_log = np.log1p(y_train)
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     
-    # Xử lý input
-    X_pred = df_input_processed[valid_cols].fillna(0)
+    df_pred = df_input.copy()
+    X_pred = df_pred[valid_cols].fillna(0)
     
     # 1. Neural Network
-    nn = MLPRegressor(hidden_layer_sizes=(50, 50), activation='relu', solver='lbfgs', 
-                      alpha=0.001, max_iter=5000, random_state=seed)
+    nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', 
+                      alpha=0.1, max_iter=5000, random_state=seed)
     nn.fit(X_train_scaled, y_train_log)
     pred_nn_log = nn.predict(scaler.transform(X_pred))
     
-    # 2. Detrending (Cho RF và XGB)
+    # 2. Detrending
     trend_model = LinearRegression()
     trend_model.fit(data_train[['Time_Index']], y_train_log)
-    trend_future = trend_model.predict(df_input_processed[['Time_Index']])
+    trend_future = trend_model.predict(df_pred[['Time_Index']])
     y_residual = y_train_log - trend_model.predict(data_train[['Time_Index']])
     
     # 3. Random Forest
@@ -281,14 +241,13 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     rf.fit(X_train, y_residual)
     
     # 4. XGBoost
-    xg = xgb.XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=5, 
+    xg = xgb.XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=4, 
                           reg_alpha=0.1, random_state=seed)
     xg.fit(X_train, y_residual)
     
     pred_rf_log = rf.predict(X_pred) + trend_future
     pred_xg_log = xg.predict(X_pred) + trend_future
     
-    # Chuyển về số thực
     pred_nn = np.expm1(pred_nn_log)
     pred_rf = np.expm1(pred_rf_log)
     pred_xg = np.expm1(pred_xg_log)
@@ -302,7 +261,6 @@ with st.sidebar:
     st.header("⚙️ Cấu Hình")
     api_key = st.text_input("API Key (Cho AI)", type="password")
     
-    # --- DANH SÁCH MODEL ---
     available_models = []
     selected_model = None
     
@@ -322,15 +280,13 @@ with st.sidebar:
                 return val
             available_models.sort(key=sort_key, reverse=True)
             
-        except Exception as e:
-            st.error("Lỗi Key hoặc mạng!")
+        except: st.error("Lỗi Key hoặc mạng!")
     
     if available_models:
         st.success(f"Tìm thấy {len(available_models)} model!")
         selected_model = st.selectbox("🤖 Chọn Model AI:", available_models, index=0)
     elif api_key:
         st.warning("Không tìm thấy model phù hợp.")
-    # ------------------------------------
     
     st.markdown("---")
     st.write("### 📅 Cập nhật Lịch Nghỉ Lễ")
@@ -369,11 +325,8 @@ with c2:
         except: pass
     
     if st.button("🤖 AI Phân Tích Ngay", disabled=not selected_model):
-        if not selected_model:
-            st.error("Chưa chọn model!")
-        else:
-            with st.spinner(f"Đang hỏi {selected_model}..."):
-                val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data, selected_model)
+        with st.spinner(f"Đang hỏi {selected_model}..."):
+            val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data, selected_model)
             st.session_state.ai_suggestion_val = val
             st.session_state.ai_suggestion_reason = reason
             st.session_state.ai_log = log
@@ -384,13 +337,10 @@ with c2:
             st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
             st.info(f"📝 {st.session_state.ai_suggestion_reason}")
         else:
-            st.warning("⚠️ AI không bắt được số liệu cụ thể. Dưới đây là câu trả lời gốc:")
+            st.warning("⚠️ AI không bắt được số liệu cụ thể.")
             raw_text = st.session_state.ai_suggestion_reason
             with st.expander("🔍 Xem nội dung AI trả lời (Debug)", expanded=True):
                 st.code(raw_text, language='text')
-            
-            if "Hết Quota" in str(st.session_state.ai_log):
-                st.error(st.session_state.ai_log)
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
@@ -476,135 +426,68 @@ if f_train and f_input:
                 if 'Thực Tế' in res.columns:
                     mask = res['Thực Tế'].notnull()
                     ax.plot(res.loc[mask, 'Date'], res.loc[mask, 'Thực Tế'], 'ko', label='Thực Tế')
-                ax.legend()
-                ax.grid(True, alpha=0.3)
+                ax.legend(); ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
 
 # ==============================================================================
-# 4. MÁY SOI SEED (PHIÊN BẢN CHỌN ĐƯỢC THÁNG CẦN DỰ BÁO)
+# 4. MÁY SOI SEED
 # ==============================================================================
 st.markdown("---")
 st.header("🔬 Find Seed")
-st.caption("Chọn chính xác THÁNG bạn muốn đạt mục tiêu để tìm Seed phù hợp.")
+if 'scan_current_seed' not in st.session_state: st.session_state.scan_current_seed = 0
+if 'scan_history' not in st.session_state: st.session_state.scan_history = pd.DataFrame()
 
-# 1. Khởi tạo
-if 'scan_current_seed' not in st.session_state:
-    st.session_state.scan_current_seed = 0
-if 'scan_history' not in st.session_state:
-    st.session_state.scan_history = pd.DataFrame()
-
-# 2. Giao diện điều khiển
 if f_train and f_input:
     with st.expander("BẢNG ĐIỀU KHIỂN & CHỌN MỤC TIÊU", expanded=True):
-        # Đọc trước file Input để lấy danh sách tháng
         df_scan_preview = ultra_scan_read_excel(f_input)
-        
         if df_scan_preview is not None:
-            # Tạo danh sách các tháng có trong file
             list_dates = [f"Tháng {int(row['Tháng'])}/{int(row['Năm'])}" for i, row in df_scan_preview.iterrows()]
             
-            # --- CẤU HÌNH QUAN TRỌNG ---
             col_target, col_val = st.columns(2)
             with col_target:
-                # Cho phép người dùng chọn tháng muốn soi
-                selected_month_str = st.selectbox("🎯 Bạn muốn kiểm tra kết quả của tháng nào?", list_dates, index=len(list_dates)-1)
-                # Tìm vị trí (index) của tháng đó trong file
+                selected_month_str = st.selectbox("🎯 Chọn tháng muốn soi:", list_dates, index=len(list_dates)-1)
                 target_index = list_dates.index(selected_month_str)
-            
             with col_val:
-                target_val = st.number_input(f"Giá trị mong muốn cho {selected_month_str}", 
-                                             value=740000000.0, step=1000000.0, format="%.0f")
+                target_val = st.number_input(f"Giá trị mong muốn", value=740000000.0, step=1000000.0, format="%.0f")
 
-            # Các cấu hình phụ
             c1, c2, c3 = st.columns(3)
-            with c1:
-                model_choice = st.selectbox("Mô hình ưu tiên:", ["Neural Network", "Random Forest", "XGBoost", "Trung Bình Cộng"])
-            with c2:
-                acc = st.slider("Sai số cho phép (+/- %)", 0.1, 10.0, 1.0)
-            with c3:
-                batch_size = st.number_input("Số lượng seed theo lô", value=20, step=10)
+            with c1: model_choice = st.selectbox("Mô hình ưu tiên:", ["Neural Network", "Random Forest", "XGBoost", "Trung Bình Cộng"])
+            with c2: acc = st.slider("Sai số (+/- %)", 0.1, 10.0, 1.0)
+            with c3: batch_size = st.number_input("Số lượng seed/lô", value=20, step=10)
 
-            # Tính toán giới hạn
-            limit_min = target_val * (1 - acc/100)
-            limit_max = target_val * (1 + acc/100)
-            
+            limit_min, limit_max = target_val * (1 - acc/100), target_val * (1 + acc/100)
             start_seed = st.session_state.scan_current_seed
             end_seed = start_seed + batch_size - 1
             
-            st.info(f"📍 Đang kiểm tra **{selected_month_str}** từ Seed {start_seed} đến Seed {end_seed}")
+            st.info(f"📍 Đang kiểm tra từ Seed {start_seed} đến {end_seed}")
+            if st.button(f"▶️ Chạy {start_seed}-{end_seed}"):
+                df_train_scan = ultra_scan_read_excel(f_train)
+                df_input_scan = ultra_scan_read_excel(f_input)
+                batch_data = []
+                p_bar = st.progress(0)
+                for i, seed in enumerate(range(start_seed, end_seed + 1)):
+                    try:
+                        p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=seed)
+                        v_nn, v_rf, v_xg = p_nn[target_index], p_rf[target_index], p_xg[target_index]
+                        v_avg = (v_nn + v_rf + v_xg) / 3
+                        val = {"Neural Network": v_nn, "Random Forest": v_rf, "XGBoost": v_xg, "Trung Bình Cộng": v_avg}[model_choice]
+                        is_pass = limit_min <= val <= limit_max
+                        batch_data.append({"Seed": seed, "Tháng": selected_month_str, "Kết quả (NN)": v_nn, "Kết quả (RF)": v_rf, "Kết quả (XGB)": v_xg, "Độ lệch": val - target_val, "Trạng thái": "✅ ĐẠT" if is_pass else "❌"})
+                    except: batch_data.append({"Seed": seed, "Trạng thái": "⚠️ Lỗi"})
+                    p_bar.progress((i + 1) / batch_size)
+                
+                st.session_state.scan_history = pd.concat([st.session_state.scan_history, pd.DataFrame(batch_data)], ignore_index=True)
+                st.session_state.scan_current_seed = end_seed + 1
+                st.rerun()
 
-            col_run, col_reset = st.columns([1, 4])
-            run_check = col_run.button(f"▶️ run {start_seed}-{end_seed}")
-            
-            if col_reset.button("🗑️ Xóa lịch sử & Về 0"):
+            if st.button("🗑️ Xóa lịch sử"):
                 st.session_state.scan_current_seed = 0
                 st.session_state.scan_history = pd.DataFrame()
                 st.rerun()
 
-            # 3. Xử lý logic chạy
-            if run_check:
-                df_train_scan = ultra_scan_read_excel(f_train)
-                df_input_scan = ultra_scan_read_excel(f_input)
-                
-                batch_data = []
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                for i, seed in enumerate(range(start_seed, end_seed + 1)):
-                    try:
-                        # Chạy mô hình
-                        p_nn, p_rf, p_xg = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, seed=seed)
-                        
-                        # --- CHÌA KHÓA: Lấy đúng vị trí tháng đã chọn ---
-                        v_nn = p_nn[target_index]
-                        v_rf = p_rf[target_index]
-                        v_xg = p_xg[target_index]
-                        v_avg = (v_nn + v_rf + v_xg) / 3
-                        
-                        # Chọn giá trị để so sánh theo ý người dùng
-                        if model_choice == "Neural Network": val = v_nn
-                        elif model_choice == "Random Forest": val = v_rf
-                        elif model_choice == "XGBoost": val = v_xg
-                        else: val = v_avg
-                        
-                        is_pass = limit_min <= val <= limit_max
-                        status = "✅ ĐẠT" if is_pass else "❌"
-                        
-                        batch_data.append({
-                            "Seed": seed,
-                            "Tháng": selected_month_str,
-                            "Kết quả (NN)": v_nn,
-                            "Kết quả (RF)": v_rf,
-                            "Kết quả (XGB)": v_xg,
-                            "Độ lệch": val - target_val,
-                            "Trạng thái": status
-                        })
-                    except Exception as e:
-                        batch_data.append({"Seed": seed, "Trạng thái": "⚠️ Lỗi"})
-                    
-                    progress_bar.progress((i + 1) / batch_size)
-                    status_text.text(f"Đang tính seed {seed}...")
-                
-                new_df = pd.DataFrame(batch_data)
-                st.session_state.scan_history = pd.concat([st.session_state.scan_history, new_df], ignore_index=True)
-                st.session_state.scan_current_seed = end_seed + 1
-                st.rerun()
-
-    # 4. Hiển thị bảng kết quả
-    st.write("---")
     if not st.session_state.scan_history.empty:
         st.subheader("📋 Kết Quả Lọc Seed")
         df_show = st.session_state.scan_history.sort_values(by='Seed')
-        
-        def highlight_pass(row):
-            if "ĐẠT" in str(row['Trạng thái']):
-                return ['background-color: #d4edda; color: #155724'] * len(row)
-            return [''] * len(row)
-
-        st.dataframe(df_show.style.apply(highlight_pass, axis=1).format({
-            "Seed": "{:.0f}",
-            "Kết quả (NN)": "{:,.0f}",  
-            "Kết quả (RF)": "{:,.0f}",  
-            "Kết quả (XGB)": "{:,.0f}",  
-            "Độ lệch": "{:+,.0f}"
+        st.dataframe(df_show.style.apply(lambda r: ['background-color: #d4edda' if "ĐẠT" in str(r['Trạng thái']) else '']*len(r), axis=1).format({
+            "Seed": "{:.0f}", "Kết quả (NN)": "{:,.0f}", "Kết quả (RF)": "{:,.0f}", "Kết quả (XGB)": "{:,.0f}", "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
