@@ -182,25 +182,37 @@ def kiem_tra_chat_luong(df, ten_file):
 
 # --- SỬA HÀM TẠO ĐẶC TRƯNG ---
 def tao_dac_trung(df, holidays_map):
-    # ... (giữ nguyên phần lịch cũ) ...
+    # 1. Sắp xếp dữ liệu theo thời gian để tính Lag cho đúng
+    df = df.sort_values(by=['Năm', 'Tháng'])
+
+    # 2. Tạo đặc trưng Mùa
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
     
-    # ... (giữ nguyên phần đếm ngày nghỉ) ...
+    # --- ĐỊNH NGHĨA HÀM CON Ở ĐÂY ĐỂ TRÁNH LỖI "NOT DEFINED" ---
+    def get_calendar_info(row):
+        y, m = int(row['Năm']), int(row['Tháng'])
+        t7, cn = dem_ngay_nghi_cuoi_tuan(y, m) # Hàm này đã có ở global
+        le_tet = holidays_map.get((y, m), 0)
+        return pd.Series([t7, cn, le_tet])
+    # -----------------------------------------------------------
+
+    # 3. Áp dụng hàm con
     df[['So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet']] = df.apply(get_calendar_info, axis=1)
     
-    # --- THÊM ĐOẠN NÀY: TỰ ĐỘNG TẠO LAG ---
-    # Sắp xếp theo thời gian để shift cho đúng
-    df = df.sort_values(by=['Năm', 'Tháng'])
-    
-    # Lag 1: Lấy giá trị của 1 dòng trước đó
-    df['Lag_1'] = df['Tổng thương phẩm'].shift(1)
-    
-    # Lag 12: Lấy giá trị của 12 dòng trước đó (Cùng kỳ năm ngoái)
-    df['Lag_12'] = df['Tổng thương phẩm'].shift(12)
-    
-    # Vì shift sẽ sinh ra dòng trống (NaN) ở mấy tháng đầu, ta điền số 0 hoặc forward fill
-    df = df.fillna(method='bfill').fillna(0) 
+    # 4. TẠO BIẾN TRỄ (LAG FEATURES)
+    # Lưu ý: Nếu cột 'Tổng thương phẩm' chưa có (file input), nó sẽ sinh ra NaN
+    if 'Tổng thương phẩm' in df.columns:
+        df['Lag_1'] = df['Tổng thương phẩm'].shift(1)   # Tháng trước
+        df['Lag_12'] = df['Tổng thương phẩm'].shift(12) # Cùng kỳ năm ngoái
+    else:
+        # Xử lý cho file Input nếu không có cột sản lượng (để tránh lỗi code)
+        df['Lag_1'] = 0
+        df['Lag_12'] = 0
+
+    # 5. Xử lý dữ liệu trống (NaN) do hàm shift sinh ra
+    # (Dùng backfill để lấp đầy mấy tháng đầu tiên bị trống)
+    df = df.fillna(method='bfill').fillna(0)
     
     df['Bien_Ngoai_Sinh'] = 0
     return df
@@ -210,6 +222,7 @@ def tao_dac_trung(df, holidays_map):
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
+    # Gọi hàm tạo đặc trưng đã sửa ở trên
     df_train = tao_dac_trung(df_train.copy(), holidays_map)
     df_input = tao_dac_trung(df_input.copy(), holidays_map)
     
@@ -219,17 +232,23 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     df_train['Time_Index'] = df_train.apply(create_time_index, axis=1)
     df_input['Time_Index'] = df_input.apply(create_time_index, axis=1)
 
+    # --- CẬP NHẬT DANH SÁCH FEATURES ---
     features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 
-            'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
-            'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh',
-            'Lag_1', 'Lag_12']
+                'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
+                'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh',
+                'Lag_1', 'Lag_12'] # <--- ĐÃ THÊM 2 CỘT NÀY
+    # -----------------------------------
     
     valid_cols = [c for c in features if c in df_train.columns and c in df_input.columns]
     target = 'Tổng thương phẩm'
     
+    # ... (Phần còn lại giữ nguyên không đổi) ...
     data_train = df_train.dropna(subset=valid_cols + [target])
     X_train = data_train[valid_cols]
     y_train = data_train[target]
+
+    # ... (Giữ nguyên đoạn code train model bên dưới) ...
+    # Copy lại đoạn code train cũ của bạn vào đây
     
     # Train Models
     y_train_log = np.log1p(y_train)
@@ -239,9 +258,9 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     df_pred = df_input.copy()
     X_pred = df_pred[valid_cols].fillna(0)
     
-    # 1. Neural Network (Random theo seed)
+    # 1. Neural Network
     nn = MLPRegressor(hidden_layer_sizes=(10, 15, 10), activation='relu', solver='lbfgs', 
-                      alpha=0.1, max_iter=5000, random_state=seed) # <--- Seed động
+                      alpha=0.1, max_iter=5000, random_state=seed)
     nn.fit(X_train_scaled, y_train_log)
     pred_nn_log = nn.predict(scaler.transform(X_pred))
     
@@ -251,28 +270,23 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     trend_future = trend_model.predict(df_pred[['Time_Index']])
     y_residual = y_train_log - trend_model.predict(data_train[['Time_Index']])
     
-    # 3. Random Forest (Random theo seed)
-    rf = RandomForestRegressor(n_estimators=200, random_state=seed) # <--- Seed động
+    # 3. Random Forest
+    rf = RandomForestRegressor(n_estimators=200, random_state=seed)
     rf.fit(X_train, y_residual)
     
-    # 4. XGBoost (Random theo seed)
+    # 4. XGBoost
     xg = xgb.XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=4, 
-                          reg_alpha=0.1, random_state=seed) # <--- Seed động
+                          reg_alpha=0.1, random_state=seed)
     xg.fit(X_train, y_residual)
     
     pred_rf_log = rf.predict(X_pred) + trend_future
     pred_xg_log = xg.predict(X_pred) + trend_future
     
-    # Chuyển về số thực
     pred_nn = np.expm1(pred_nn_log)
     pred_rf = np.expm1(pred_rf_log)
     pred_xg = np.expm1(pred_xg_log)
     
-    # ==========================================================================
-    # LOGIC ĐIỀU CHỈNH NGÀY NGHỈ (Weighted Days: -1.8% mỗi ngày nghỉ)
-    # ==========================================================================
     return pred_nn, pred_rf, pred_xg
-
 # ==============================================================================
 # GIAO DIỆN CHÍNH
 # ==============================================================================
@@ -586,5 +600,6 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
 
 
