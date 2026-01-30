@@ -180,15 +180,28 @@ def kiem_tra_chat_luong(df, ten_file):
         for e in errors: st.write(e)
         st.stop()
 
+# --- SỬA HÀM TẠO ĐẶC TRƯNG ---
 def tao_dac_trung(df, holidays_map):
+    # ... (giữ nguyên phần lịch cũ) ...
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
-    def get_calendar_info(row):
-        y, m = int(row['Năm']), int(row['Tháng'])
-        t7, cn = dem_ngay_nghi_cuoi_tuan(y, m)
-        le_tet = holidays_map.get((y, m), 0)
-        return pd.Series([t7, cn, le_tet])
+    
+    # ... (giữ nguyên phần đếm ngày nghỉ) ...
     df[['So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet']] = df.apply(get_calendar_info, axis=1)
+    
+    # --- THÊM ĐOẠN NÀY: TỰ ĐỘNG TẠO LAG ---
+    # Sắp xếp theo thời gian để shift cho đúng
+    df = df.sort_values(by=['Năm', 'Tháng'])
+    
+    # Lag 1: Lấy giá trị của 1 dòng trước đó
+    df['Lag_1'] = df['Tổng thương phẩm'].shift(1)
+    
+    # Lag 12: Lấy giá trị của 12 dòng trước đó (Cùng kỳ năm ngoái)
+    df['Lag_12'] = df['Tổng thương phẩm'].shift(12)
+    
+    # Vì shift sẽ sinh ra dòng trống (NaN) ở mấy tháng đầu, ta điền số 0 hoặc forward fill
+    df = df.fillna(method='bfill').fillna(0) 
+    
     df['Bien_Ngoai_Sinh'] = 0
     return df
 
@@ -207,8 +220,9 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     df_input['Time_Index'] = df_input.apply(create_time_index, axis=1)
 
     features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 
-                'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
-                'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh']
+            'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
+            'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh',
+            'Lag_1', 'Lag_12']
     
     valid_cols = [c for c in features if c in df_train.columns and c in df_input.columns]
     target = 'Tổng thương phẩm'
@@ -572,4 +586,5 @@ if f_train and f_input:
             "Kết quả (XGB)": "{:,.0f}",  
             "Độ lệch": "{:+,.0f}"
         }), use_container_width=True)
+
 
