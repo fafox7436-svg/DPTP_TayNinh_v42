@@ -10,7 +10,6 @@ import xgboost as xgb
 import requests
 from bs4 import BeautifulSoup
 import re
-import time
 import calendar
 import warnings
 
@@ -39,10 +38,17 @@ with col2:
 st.markdown("---")
 
 # --- KIỂM TRA THƯ VIỆN AI ---
+# 1. Google Gemini
 try:
     import google.generativeai as genai
     HAS_GEMINI = True
 except: HAS_GEMINI = False
+
+# 2. OpenAI ChatGPT
+try:
+    from openai import OpenAI
+    HAS_OPENAI = True
+except: HAS_OPENAI = False
 
 # ==============================================================================
 # 1. CẤU HÌNH NGÀY NGHỈ
@@ -69,7 +75,7 @@ def dem_ngay_nghi_cuoi_tuan(year, month):
     return saturdays, sundays
 
 # ==============================================================================
-# 2. MODULE AI (CHỌN MODEL)
+# 2. MODULE AI (GEMINI + CHATGPT)
 # ==============================================================================
 def lay_noi_dung_tu_link(url):
     try:
@@ -89,11 +95,12 @@ def trich_xuat_so(text):
         return 0.0
     except: return 0.0
 
-def xu_ly_du_lieu_dinh_tinh(api_key, input_data, target_model_name):
+def xu_ly_du_lieu_dinh_tinh(api_key, input_data, target_model_name, provider):
     if not api_key: return 0.0, "⚠️ Chưa nhập API Key.", "Thủ công"
+    
+    # 1. Xử lý đầu vào (Link hoặc Text)
     text_data = input_data
     status = ""
-    
     if input_data.strip().startswith("http"):
         with st.spinner("Đang đọc bài báo..."):
             extracted, msg = lay_noi_dung_tu_link(input_data)
@@ -102,30 +109,47 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data, target_model_name):
                 status = msg + "\n"
             else: return 0.0, msg, ""
 
+    # 2. Tạo Prompt chung
+    prompt = (f"Đọc thông tin sau: '{text_data[:3000]}'. "
+              "Hãy đánh giá xem phụ tải điện tháng này sẽ TĂNG hay GIẢM bao nhiêu % so với CÙNG KỲ NĂM TRƯỚC. "
+              "Chỉ đưa ra con số ước lượng dựa trên tác động (thời tiết, kinh tế...). "
+              "Trả về định dạng: SỐ | LÝ DO NGẮN GỌN. Ví dụ: +5.5 | Nắng nóng hơn năm ngoái.")
+
+    res = ""
+    
+    # 3. Gọi API theo Nhà cung cấp
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(target_model_name)
-        
-        prompt = (f"Đọc thông tin sau: '{text_data[:3000]}'. "
-                  "Hãy đánh giá xem phụ tải điện tháng này sẽ TĂNG hay GIẢM bao nhiêu % so với CÙNG KỲ NĂM TRƯỚC. "
-                  "Chỉ đưa ra con số ước lượng dựa trên tác động (thời tiết, kinh tế...). "
-                  "Trả về định dạng: SỐ | LÝ DO NGẮN GỌN. Ví dụ: +5.5 | Nắng nóng hơn năm ngoái.")
-        
-        response = model.generate_content(prompt)
-        res = response.text.strip()
-        
+        if provider == "Google Gemini":
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(target_model_name)
+            response = model.generate_content(prompt)
+            res = response.text.strip()
+            
+        elif provider == "OpenAI ChatGPT":
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model=target_model_name,
+                messages=[
+                    {"role": "system", "content": "Bạn là chuyên gia dự báo phụ tải điện."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.5
+            )
+            res = response.choices[0].message.content.strip()
+
+        # 4. Xử lý kết quả trả về
         if "|" in res:
             parts = res.split("|")
             val = trich_xuat_so(parts[0]) 
-            return val, f"{status}✅ AI Đã xong ({target_model_name})", parts[1].strip()
+            return val, f"{status}✅ AI Đã xong ({provider} - {target_model_name})", parts[1].strip()
             
         val = trich_xuat_so(res)
         if val != 0.0: return val, f"{status}✅ AI Đã xong (Tự bắt số)!", res
         
-        return 0.0, f"⚠️ AI ({target_model_name}) không tìm thấy số liệu cụ thể.", res
+        return 0.0, f"⚠️ AI ({provider}) không tìm thấy số liệu cụ thể.", res
         
     except Exception as e:
-        if "429" in str(e): return 0.0, "⚠️ Hết hạn mức (Quota) cho model này.", "Hết Quota"
+        if "429" in str(e): return 0.0, "⚠️ Hết hạn mức (Quota).", "Hết Quota"
         return 0.0, f"❌ Lỗi AI: {str(e)[:50]}...", "Lỗi"
 
 # ==============================================================================
@@ -259,32 +283,40 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
 # ==============================================================================
 with st.sidebar:
     st.header("⚙️ Cấu Hình")
-    api_key = st.text_input("API Key (Cho AI)", type="password")
+    
+    # --- CHỌN PROVIDER ---
+    provider = st.selectbox("Chọn Nhà Cung Cấp AI:", ["Google Gemini", "OpenAI ChatGPT"])
+    
+    api_key = st.text_input(f"API Key ({provider})", type="password")
     
     available_models = []
     selected_model = None
     
-    if api_key:
-        try:
-            genai.configure(api_key=api_key)
-            models_obj = genai.list_models()
-            for m in models_obj:
-                if 'generateContent' in m.supported_generation_methods and 'gemini' in m.name:
-                    available_models.append(m.name)
+    # --- LOGIC HIỂN THỊ MODEL ---
+    if provider == "Google Gemini":
+        if api_key:
+            try:
+                genai.configure(api_key=api_key)
+                models_obj = genai.list_models()
+                for m in models_obj:
+                    if 'generateContent' in m.supported_generation_methods and 'gemini' in m.name:
+                        available_models.append(m.name)
+                # Sắp xếp ưu tiên
+                def sort_key(name):
+                    val = 0
+                    if 'pro' in name.lower(): val += 100
+                    if '1.5' in name: val += 50
+                    if 'flash' in name.lower(): val += 10
+                    return val
+                available_models.sort(key=sort_key, reverse=True)
+            except: st.error("Lỗi Key Gemini hoặc mạng!")
             
-            def sort_key(name):
-                val = 0
-                if 'pro' in name.lower(): val += 100
-                if '1.5' in name: val += 50
-                if 'flash' in name.lower(): val += 10
-                return val
-            available_models.sort(key=sort_key, reverse=True)
-            
-        except: st.error("Lỗi Key hoặc mạng!")
+    elif provider == "OpenAI ChatGPT":
+        # Với OpenAI, ta liệt kê tĩnh các model phổ biến để tránh lỗi API khi chưa có key
+        available_models = ["gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"]
     
     if available_models:
-        st.success(f"Tìm thấy {len(available_models)} model!")
-        selected_model = st.selectbox("🤖 Chọn Model AI:", available_models, index=0)
+        selected_model = st.selectbox("🤖 Chọn Model:", available_models, index=0)
     elif api_key:
         st.warning("Không tìm thấy model phù hợp.")
     
@@ -324,9 +356,10 @@ with c2:
                 st.session_state.detected_months = sorted(list(set(zip(df_temp['Năm'], df_temp['Tháng']))))
         except: pass
     
+    # Nút bấm kích hoạt AI
     if st.button("🤖 AI Phân Tích Ngay", disabled=not selected_model):
-        with st.spinner(f"Đang hỏi {selected_model}..."):
-            val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data, selected_model)
+        with st.spinner(f"Đang hỏi {provider} ({selected_model})..."):
+            val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data, selected_model, provider)
             st.session_state.ai_suggestion_val = val
             st.session_state.ai_suggestion_reason = reason
             st.session_state.ai_log = log
@@ -337,7 +370,7 @@ with c2:
             st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
             st.info(f"📝 {st.session_state.ai_suggestion_reason}")
         else:
-            st.warning("⚠️ AI không bắt được số liệu cụ thể.")
+            st.warning(f"⚠️ {provider} không tìm thấy số liệu cụ thể.")
             raw_text = st.session_state.ai_suggestion_reason
             with st.expander("🔍 Xem nội dung AI trả lời (Debug)", expanded=True):
                 st.code(raw_text, language='text')
