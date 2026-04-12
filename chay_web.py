@@ -367,39 +367,41 @@ with c2:
 
     # --- ĐOẠN HIỂN THỊ KẾT QUẢ VÀ SO SÁNH (ĐÃ SỬA LỖI THỤT LỀ) ---
     if 'ai_suggestion_val' in st.session_state:
-        if st.session_state.ai_suggestion_val != 0:
-            st.success(f"{st.session_state.ai_log}")
+    if st.session_state.ai_suggestion_val != 0:
+        st.success(f"{st.session_state.ai_log}")
+        
+        # 1. Cho phép người dùng chọn tháng muốn soi cùng kỳ
+        if st.session_state.detected_months:
+            options = [f"Tháng {m}/{y}" for y, m in st.session_state.detected_months]
+            # Mặc định chọn tháng cuối cùng trong danh sách (thường là tháng mới nhất)
+            selected_ref = st.selectbox("Soi cùng kỳ cho tháng:", options, index=len(options)-1)
             
-            # Lấy dữ liệu cùng kỳ từ file Train
-            if f_train and st.session_state.detected_months:
+            # Tách lại Year, Month từ lựa chọn
+            sel_m = int(selected_ref.split('/')[0].replace('Tháng ', ''))
+            sel_y = int(selected_ref.split('/')[1])
+            last_year = sel_y - 1
+            
+            # 2. Tìm số liệu thực tế trong file Train
+            if f_train:
                 try:
                     df_hist = ultra_scan_read_excel(f_train)
-                    target_y, target_m = st.session_state.detected_months[0]
-                    last_year = target_y - 1
-                    
-                    row_ly = df_hist[(df_hist['Năm'] == last_year) & (df_hist['Tháng'] == target_m)]
+                    row_ly = df_hist[(df_hist['Năm'] == last_year) & (df_hist['Tháng'] == sel_m)]
                     
                     if not row_ly.empty:
                         val_old = row_ly['Tổng thương phẩm'].values[0]
                         ai_pct = st.session_state.ai_suggestion_val
                         val_new = val_old * (1 + ai_pct/100)
                         
-                        # Hiển thị số liệu tuyệt đối
-                        st.markdown(f"**So sánh cùng kỳ ({target_m}/{last_year}):**")
+                        st.markdown(f"**Kết quả đối chiếu ({sel_m}/{last_year}):**")
                         ma, mb = st.columns(2)
-                        ma.metric("Năm ngoái", f"{val_old:,.0f}")
-                        mb.metric("Dự tính AI", f"{val_new:,.0f}", f"{ai_pct:+.1f}%")
+                        ma.metric(f"Tháng {sel_m}/{last_year}", f"{val_old:,.0f}")
+                        mb.metric(f"Dự tính {sel_m}/{sel_y}", f"{val_new:,.0f}", f"{ai_pct:+.1f}%")
                     else:
-                        st.metric("AI Đề Xuất", f"{st.session_state.ai_suggestion_val}%")
-                        st.caption(f"⚠️ Không tìm thấy số liệu cùng kỳ {target_m}/{last_year}")
+                        st.warning(f"⚠️ Không có dữ liệu thực tế tháng {sel_m}/{last_year}")
                 except:
-                    st.metric("AI Đề Xuất", f"{st.session_state.ai_suggestion_val}%")
-            
-            st.info(f"📝 **Lý do:** {st.session_state.ai_suggestion_reason}")
-        else:
-            st.warning(f"⚠️ AI không tìm thấy con số cụ thể.")
-            with st.expander("Chi tiết phản hồi từ AI"):
-                st.write(st.session_state.ai_suggestion_reason)
+                    st.error("Lỗi khi đọc file lịch sử để đối chiếu.")
+        
+        st.info(f"📝 **Lý do AI:** {st.session_state.ai_suggestion_reason}")
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
