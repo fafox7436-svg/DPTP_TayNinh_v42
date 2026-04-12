@@ -365,15 +365,41 @@ with c2:
             st.session_state.ai_log = log
 
     if 'ai_suggestion_val' in st.session_state:
-        if st.session_state.ai_suggestion_val != 0:
-            st.success(f"{st.session_state.ai_log}")
-            st.metric(label="AI Đề Xuất", value=f"{st.session_state.ai_suggestion_val}%")
-            st.info(f"📝 {st.session_state.ai_suggestion_reason}")
-        else:
-            st.warning(f"⚠️ {provider} không tìm thấy số liệu cụ thể.")
-            raw_text = st.session_state.ai_suggestion_reason
-            with st.expander("🔍 Xem nội dung AI trả lời (Debug)", expanded=True):
-                st.code(raw_text, language='text')
+    if st.session_state.ai_suggestion_val != 0:
+        st.success(f"{st.session_state.ai_log}")
+        
+        # 1. Tính toán con số thực tế cùng kỳ
+        if f_train:
+            try:
+                df_hist = ultra_scan_read_excel(f_train)
+                # Lấy tháng đầu tiên trong danh sách dự báo để làm tham chiếu nhanh
+                if st.session_state.detected_months:
+                    target_y, target_m = st.session_state.detected_months[0]
+                    last_year = target_y - 1
+                    
+                    # Tìm dòng dữ liệu cùng kỳ năm ngoái
+                    row_last_year = df_hist[(df_hist['Năm'] == last_year) & (df_hist['Tháng'] == target_m)]
+                    
+                    if not row_last_year.empty:
+                        val_old = row_last_year['Tổng thương phẩm'].values[0]
+                        ai_pct = st.session_state.ai_suggestion_val
+                        val_new = val_old * (1 + ai_pct/100)
+                        
+                        st.markdown(f"**So sánh cùng kỳ (Tháng {target_m}/{last_year}):**")
+                        
+                        # Hiển thị Metric cho chuyên nghiệp
+                        ma, mb = st.columns(2)
+                        ma.metric("Thực tế cũ", f"{val_old:,.0f}")
+                        mb.metric("Dự tính AI", f"{val_new:,.0f}", f"{ai_pct:+.1f}%")
+                        
+                        st.caption(f"ℹ️ Con số này được tính bằng: Thực tế {target_m}/{last_year} + {ai_pct}%")
+                    else:
+                        st.warning(f"Không tìm thấy dữ liệu tháng {target_m}/{last_year} trong file lịch sử.")
+            except Exception as e:
+                st.error(f"Lỗi tính toán thực tế: {e}")
+
+        # 2. Hiển thị lý do của AI
+        st.info(f"📝 **Lý do AI:** {st.session_state.ai_suggestion_reason}")
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
