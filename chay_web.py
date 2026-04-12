@@ -340,13 +340,14 @@ st.write("---")
 if 'param_dict' not in st.session_state: st.session_state.param_dict = {}
 
 # --- AI & CHỐT PHƯƠNG ÁN ---
+# --- AI & CHỐT PHƯƠNG ÁN ---
 st.subheader("1️⃣ Tham khảo AI & Chốt phương án")
 c1, c2 = st.columns([2, 1])
 if 'detected_months' not in st.session_state: st.session_state.detected_months = []
 
 with c1: 
-    text_data = st.text_area("Dán link báo hoặc tin tức vào đây:", height=100, 
-                             placeholder="Ví dụ: Dự báo nắng nóng gay gắt tháng tới...")
+    text_data = st.text_area("Dán link báo hoặc tin tức vào đây:", height=150, 
+                             placeholder="Ví dụ: Dự báo nắng nóng gay gắt tháng tới tại khu vực miền Nam...")
 
 with c2:
     if f_input:
@@ -357,49 +358,48 @@ with c2:
         except: pass
     
     # Nút bấm kích hoạt AI
-    if st.button("🤖 AI Phân Tích Ngay", disabled=not selected_model):
-        with st.spinner(f"Đang hỏi {provider} ({selected_model})..."):
+    if st.button("🤖 AI Phân Tích Ngay", disabled=not selected_model, use_container_width=True):
+        with st.spinner(f"Đang hỏi {provider}..."):
             val, log, reason = xu_ly_du_lieu_dinh_tinh(api_key, text_data, selected_model, provider)
             st.session_state.ai_suggestion_val = val
             st.session_state.ai_suggestion_reason = reason
             st.session_state.ai_log = log
 
+    # --- ĐOẠN HIỂN THỊ KẾT QUẢ VÀ SO SÁNH (ĐÃ SỬA LỖI THỤT LỀ) ---
     if 'ai_suggestion_val' in st.session_state:
-    if st.session_state.ai_suggestion_val != 0:
-        st.success(f"{st.session_state.ai_log}")
-        
-        # 1. Tính toán con số thực tế cùng kỳ
-        if f_train:
-            try:
-                df_hist = ultra_scan_read_excel(f_train)
-                # Lấy tháng đầu tiên trong danh sách dự báo để làm tham chiếu nhanh
-                if st.session_state.detected_months:
+        if st.session_state.ai_suggestion_val != 0:
+            st.success(f"{st.session_state.ai_log}")
+            
+            # Lấy dữ liệu cùng kỳ từ file Train
+            if f_train and st.session_state.detected_months:
+                try:
+                    df_hist = ultra_scan_read_excel(f_train)
                     target_y, target_m = st.session_state.detected_months[0]
                     last_year = target_y - 1
                     
-                    # Tìm dòng dữ liệu cùng kỳ năm ngoái
-                    row_last_year = df_hist[(df_hist['Năm'] == last_year) & (df_hist['Tháng'] == target_m)]
+                    row_ly = df_hist[(df_hist['Năm'] == last_year) & (df_hist['Tháng'] == target_m)]
                     
-                    if not row_last_year.empty:
-                        val_old = row_last_year['Tổng thương phẩm'].values[0]
+                    if not row_ly.empty:
+                        val_old = row_ly['Tổng thương phẩm'].values[0]
                         ai_pct = st.session_state.ai_suggestion_val
                         val_new = val_old * (1 + ai_pct/100)
                         
-                        st.markdown(f"**So sánh cùng kỳ (Tháng {target_m}/{last_year}):**")
-                        
-                        # Hiển thị Metric cho chuyên nghiệp
+                        # Hiển thị số liệu tuyệt đối
+                        st.markdown(f"**So sánh cùng kỳ ({target_m}/{last_year}):**")
                         ma, mb = st.columns(2)
-                        ma.metric("Thực tế cũ", f"{val_old:,.0f}")
+                        ma.metric("Năm ngoái", f"{val_old:,.0f}")
                         mb.metric("Dự tính AI", f"{val_new:,.0f}", f"{ai_pct:+.1f}%")
-                        
-                        st.caption(f"ℹ️ Con số này được tính bằng: Thực tế {target_m}/{last_year} + {ai_pct}%")
                     else:
-                        st.warning(f"Không tìm thấy dữ liệu tháng {target_m}/{last_year} trong file lịch sử.")
-            except Exception as e:
-                st.error(f"Lỗi tính toán thực tế: {e}")
-
-        # 2. Hiển thị lý do của AI
-        st.info(f"📝 **Lý do AI:** {st.session_state.ai_suggestion_reason}")
+                        st.metric("AI Đề Xuất", f"{st.session_state.ai_suggestion_val}%")
+                        st.caption(f"⚠️ Không tìm thấy số liệu cùng kỳ {target_m}/{last_year}")
+                except:
+                    st.metric("AI Đề Xuất", f"{st.session_state.ai_suggestion_val}%")
+            
+            st.info(f"📝 **Lý do:** {st.session_state.ai_suggestion_reason}")
+        else:
+            st.warning(f"⚠️ AI không tìm thấy con số cụ thể.")
+            with st.expander("Chi tiết phản hồi từ AI"):
+                st.write(st.session_state.ai_suggestion_reason)
 
 # --- NGƯỜI DÙNG QUYẾT ĐỊNH ---
 st.write("---")
