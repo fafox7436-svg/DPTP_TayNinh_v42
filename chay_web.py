@@ -25,22 +25,34 @@ st.markdown("""
 <style>
     .stApp { background: linear-gradient(180deg, #ffffff 0%, #cce6ff 100%); }
     h1, h2, h3, h4 { color: #003366 !important; font-family: 'Segoe UI', Tahoma, sans-serif; font-weight: 700; }
-    .block-container { padding-top: 1rem; padding-bottom: 5rem; } /* Giảm padding-top để tên tác giả sát mép trên */
+    .block-container { padding-top: 2rem; padding-bottom: 5rem; }
     div[data-testid="stSelectbox"] label { color: #d63384 !important; font-weight: bold; font-size: 1.1em; }
-    .author-text { color: #555; font-size: 0.9em; font-style: italic; margin-bottom: 5px; }
+    /* Định dạng cho dòng tên tác giả */
+    .author-subtitle { 
+        color: #444; 
+        font-size: 16px; 
+        font-style: italic; 
+        margin-top: -15px; /* Đẩy sát lên tiêu đề h3 */
+        margin-bottom: 10px;
+        font-family: 'Segoe UI', sans-serif;
+        font-weight: 500;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- THÊM DÒNG TÁC GIẢ Ở ĐÂY ---
-st.markdown('<p class="author-text">Tác giả: Lê Minh Trí</p>', unsafe_allow_html=True)
-
+# --- BỐ CỤC TIÊU ĐỀ ---
 col1, col2 = st.columns([8, 2], vertical_alignment="center")
-with col1: st.markdown("<h3>HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH</h3>", unsafe_allow_html=True)
-with col2: 
-    try: st.image("image_1.png", use_column_width=True)
-    except: st.write("EVN SPC")
-st.markdown("---")
+with col1: 
+    st.markdown("<h3>HỆ THỐNG DỰ BÁO PHỤ TẢI ĐIỆN TỈNH TÂY NINH</h3>", unsafe_allow_html=True)
+    # THÊM TÊN TÁC GIẢ Ở ĐÂY
+    st.markdown('<p class="author-subtitle">Tác giả: Lê Minh Trí</p>', unsafe_allow_html=True)
 
+with col2: 
+    try: 
+        st.image("image_1.png", use_column_width=True)
+    except: 
+        st.write("EVN SPC")
+st.markdown("---")
 # --- KIỂM TRA THƯ VIỆN AI ---
 # 1. Google Gemini
 try:
