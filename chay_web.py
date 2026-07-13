@@ -70,15 +70,38 @@ except: HAS_OPENAI = False
 # 1. CẤU HÌNH NGÀY NGHỈ
 # ==============================================================================
 DEFAULT_HOLIDAYS = [
-    {"Năm": 2023, "Tháng": 1, "Số ngày nghỉ lễ": 8}, {"Năm": 2023, "Tháng": 4, "Số ngày nghỉ lễ": 1},
-    {"Năm": 2023, "Tháng": 5, "Số ngày nghỉ lễ": 2}, {"Năm": 2023, "Tháng": 9, "Số ngày nghỉ lễ": 2},
-    {"Năm": 2024, "Tháng": 1, "Số ngày nghỉ lễ": 1}, {"Năm": 2024, "Tháng": 2, "Số ngày nghỉ lễ": 7},
-    {"Năm": 2024, "Tháng": 4, "Số ngày nghỉ lễ": 3}, {"Năm": 2024, "Tháng": 5, "Số ngày nghỉ lễ": 1},
-    {"Năm": 2024, "Tháng": 9, "Số ngày nghỉ lễ": 2}, {"Năm": 2025, "Tháng": 1, "Số ngày nghỉ lễ": 7},
-    {"Năm": 2025, "Tháng": 2, "Số ngày nghỉ lễ": 2}, {"Năm": 2025, "Tháng": 4, "Số ngày nghỉ lễ": 2},
-    {"Năm": 2025, "Tháng": 5, "Số ngày nghỉ lễ": 1}, {"Năm": 2025, "Tháng": 9, "Số ngày nghỉ lễ": 2},
-    {"Năm": 2026, "Tháng": 1, "Số ngày nghỉ lễ": 1}, {"Năm": 2026, "Tháng": 2, "Số ngày nghỉ lễ": 5},
-    {"Năm": 2026, "Tháng": 4, "Số ngày nghỉ lễ": 1}, {"Năm": 2026, "Tháng": 5, "Số ngày nghỉ lễ": 2},
+    # Năm 2023
+    {"Năm": 2023, "Tháng": 1, "Tết Âm": 7, "Lễ Nhỏ": 1},
+    {"Năm": 2023, "Tháng": 4, "Tết Âm": 0, "Lễ Nhỏ": 2},
+    {"Năm": 2023, "Tháng": 5, "Tết Âm": 0, "Lễ Nhỏ": 3},
+    {"Năm": 2023, "Tháng": 9, "Tết Âm": 0, "Lễ Nhỏ": 2},
+    
+    # Năm 2024
+    {"Năm": 2024, "Tháng": 1, "Tết Âm": 0, "Lễ Nhỏ": 1},
+    {"Năm": 2024, "Tháng": 2, "Tết Âm": 7, "Lễ Nhỏ": 0},
+    {"Năm": 2024, "Tháng": 4, "Tết Âm": 0, "Lễ Nhỏ": 3},
+    {"Năm": 2024, "Tháng": 5, "Tết Âm": 0, "Lễ Nhỏ": 1},
+    {"Năm": 2024, "Tháng": 9, "Tết Âm": 0, "Lễ Nhỏ": 2},
+    
+    # Năm 2025
+    {"Năm": 2025, "Tháng": 1, "Tết Âm": 7, "Lễ Nhỏ": 1},
+    {"Năm": 2025, "Tháng": 2, "Tết Âm": 2, "Lễ Nhỏ": 0},
+    {"Năm": 2025, "Tháng": 4, "Tết Âm": 0, "Lễ Nhỏ": 2},
+    {"Năm": 2025, "Tháng": 5, "Tết Âm": 0, "Lễ Nhỏ": 2},
+    {"Năm": 2025, "Tháng": 9, "Tết Âm": 0, "Lễ Nhỏ": 2},
+    
+    # Năm 2026
+    {"Năm": 2026, "Tháng": 1, "Tết Âm": 0, "Lễ Nhỏ": 1},
+    {"Năm": 2026, "Tháng": 2, "Tết Âm": 7, "Lễ Nhỏ": 0},
+    {"Năm": 2026, "Tháng": 4, "Tết Âm": 0, "Lễ Nhỏ": 3},
+    {"Năm": 2026, "Tháng": 5, "Tết Âm": 0, "Lễ Nhỏ": 1},
+    {"Năm": 2026, "Tháng": 9, "Tết Âm": 0, "Lễ Nhỏ": 2},
+    
+    # Năm 2027
+    {"Năm": 2027, "Tháng": 1, "Tết Âm": 0, "Lễ Nhỏ": 1},
+    {"Năm": 2027, "Tháng": 2, "Tết Âm": 7, "Lễ Nhỏ": 0},
+    {"Năm": 2027, "Tháng": 4, "Tết Âm": 0, "Lễ Nhỏ": 2},
+    {"Năm": 2027, "Tháng": 5, "Tết Âm": 0, "Lễ Nhỏ": 1},
 ]
 
 def dem_ngay_nghi_cuoi_tuan(year, month):
@@ -179,8 +202,7 @@ def chuan_hoa_ten_cot(df):
         'year': 'Năm', 'nam': 'Năm', 'năm': 'Năm',
         'tổng thương phẩm': 'Tổng thương phẩm', 'tong thuong pham': 'Tổng thương phẩm', 'sản lượng': 'Tổng thương phẩm',
         'nhiệt độ tb': 'Nhiệt độ TB', 'nhiet do tb': 'Nhiệt độ TB',
-        'độ ẩm': 'Độ ẩm', 'do am': 'Độ ẩm', 'số ngày': 'Số ngày', 'so ngay': 'Số ngày',
-        'số ngày nghỉ': 'So_Ngay_Nghi', 'so ngay nghi': 'So_Ngay_Nghi'
+        'độ ẩm': 'Độ ẩm', 'do am': 'Độ ẩm', 'số ngày': 'Số ngày', 'so ngay': 'Số ngày'
     }
     new_cols = {}
     for col in df.columns:
@@ -226,9 +248,9 @@ def tao_dac_trung(df, holidays_map):
     def get_calendar_info(row):
         y, m = int(row['Năm']), int(row['Tháng'])
         t7, cn = dem_ngay_nghi_cuoi_tuan(y, m)
-        le_tet = holidays_map.get((y, m), 0)
-        return pd.Series([t7, cn, le_tet])
-    df[['So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet']] = df.apply(get_calendar_info, axis=1)
+        tet_am, le_nho = holidays_map.get((y, m), (0, 0))
+        return pd.Series([t7, cn, tet_am, le_nho])
+    df[['So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Tet_Am', 'So_Ngay_Le_Nho']] = df.apply(get_calendar_info, axis=1)
     df['Bien_Ngoai_Sinh'] = 0
     return df
 
@@ -247,7 +269,7 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, seed=42):
     df_input['Time_Index'] = df_input.apply(create_time_index, axis=1)
 
     features = ['Tháng', 'Năm', 'Số ngày', 'Nhiệt độ TB', 'Độ ẩm', 
-                'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Le_Tet', 
+                'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Tet_Am', 'So_Ngay_Le_Nho', 
                 'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh']
     
     valid_cols = [c for c in features if c in df_train.columns and c in df_input.columns]
@@ -341,7 +363,9 @@ with st.sidebar:
     st.write("### 📅 Cập nhật Lịch Nghỉ Lễ")
     df_default = pd.DataFrame(DEFAULT_HOLIDAYS)
     edited_df = st.data_editor(df_default, num_rows="dynamic", use_container_width=True)
-    USER_HOLIDAYS_MAP = dict(zip(zip(edited_df['Năm'], edited_df['Tháng']), edited_df['Số ngày nghỉ lễ']))
+    USER_HOLIDAYS_MAP = {}
+    for _, row in edited_df.iterrows():
+        USER_HOLIDAYS_MAP[(int(row['Năm']), int(row['Tháng']))] = (int(row['Tết Âm']), int(row['Lễ Nhỏ']))
     
     st.markdown("---")
     seed_val = st.number_input("Random Seed", value=42)
@@ -465,7 +489,8 @@ if f_train and f_input:
                 res = df_input_main[['Năm', 'Tháng']].copy()
                 df_check = tao_dac_trung(df_input_main.copy(), USER_HOLIDAYS_MAP)
                 res['T7+CN'] = df_check['So_Ngay_T7'] + df_check['So_Ngay_CN']
-                res['Lễ Tết'] = df_check['So_Ngay_Le_Tet']
+                res['Tết Âm'] = df_check['So_Ngay_Tet_Am']
+                res['Lễ Nhỏ'] = df_check['So_Ngay_Le_Nho']
                 
                 res['Neural Network'] = pred_nn
                 res['Random Forest'] = pred_rf
@@ -496,14 +521,15 @@ if f_train and f_input:
                 st.session_state.trend_val = p_trend
 
                 st.subheader("📊 Kết Quả Dự Báo")
-                cols = ['Tháng', 'Năm', 'Thực Tế', 'T7+CN', 'Lễ Tết', 'Neural Network', 'Random Forest', 'XGBoost', 'Điều Chỉnh (%)', 'Ghi chú']
+                cols = ['Tháng', 'Năm', 'Thực Tế', 'T7+CN', 'Tết Âm', 'Lễ Nhỏ', 'Neural Network', 'Random Forest', 'XGBoost', 'Điều Chỉnh (%)', 'Ghi chú']
                 cols = [c for c in cols if c in res.columns]
                 
-                # GIỮ NGUYÊN FORMAT BẢNG CỦA ÔNG
+                # GIỮ NGUYÊN FORMAT BẢNG CỦA ÔNG (Chỉ thay đổi cột)
                 st.dataframe(res[cols].style.format({
                     'Thực Tế': '{:,.0f}', 'Neural Network': '{:,.0f}', 
                     'Random Forest': '{:,.0f}', 'XGBoost': '{:,.0f}',
-                    'Điều Chỉnh (%)': '{:+.1f}%', 'T7+CN': '{:.0f}', 'Lễ Tết': '{:.0f}'
+                    'Điều Chỉnh (%)': '{:+.1f}%', 'T7+CN': '{:.0f}', 
+                    'Tết Âm': '{:.0f}', 'Lễ Nhỏ': '{:.0f}'
                 }), use_container_width=True)
                 
                 # GIỮ NGUYÊN CODE VẼ 4 ĐƯỜNG ĐỒ THỊ CỦA ÔNG
