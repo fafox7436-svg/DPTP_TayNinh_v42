@@ -409,9 +409,6 @@ if f_train and f_input:
                 res['Neural Network'] = pred_nn
                 res['Random Forest'] = pred_rf
                 res['XGBoost'] = pred_xg
-                
-                # Tính trung bình 3 mô hình làm Tổng (Q)
-                res['Tổng AI (Q)'] = (pred_nn + pred_rf + pred_xg) / 3
 
                 if 'Tổng thương phẩm' in df_train_main.columns:
                     actual = df_train_main[['Năm', 'Tháng', 'Tổng thương phẩm']]
@@ -423,13 +420,13 @@ if f_train and f_input:
                 st.success("✅ Đã chạy xong Mô hình AI. Hãy chuyển xuống Bảng tinh chỉnh bên dưới!")
                 
                 st.subheader("📊 Kết Quả Dự Báo Tổng Của Từng Thuật Toán (Tham khảo)")
-                cols = ['Tháng', 'Năm', 'Thực Tế', 'Neural Network', 'Random Forest', 'XGBoost', 'Tổng AI (Q)']
+                cols = ['Tháng', 'Năm', 'Thực Tế', 'Neural Network', 'Random Forest', 'XGBoost']
                 cols = [c for c in cols if c in res.columns]
                 
                 st.dataframe(res[cols].style.format({
                     'Thực Tế': '{:,.0f}', 'Neural Network': '{:,.0f}', 
-                    'Random Forest': '{:,.0f}', 'XGBoost': '{:,.0f}', 'Tổng AI (Q)': '{:,.0f}'
-                }).apply(lambda x: ['background-color: #e6f2ff; font-weight: bold' if i == 'Tổng AI (Q)' else '' for i in x.index], axis=1), use_container_width=True)
+                    'Random Forest': '{:,.0f}', 'XGBoost': '{:,.0f}'
+                }), use_container_width=True)
                 
 # ==============================================================================
 # BẢNG TƯƠNG TÁC: CHỐT SỐ & TINH CHỈNH HỆ SỐ THEO NGƯỜI DÙNG (CẤU TRÚC 3 BẢNG)
@@ -440,34 +437,47 @@ if 'res_output' in st.session_state:
     
     # Cho phép người dùng chọn mô hình muốn áp dụng
     model_for_base = st.selectbox(
-        "🎯 Chọn Mô hình áp dụng để tính toán Hệ số:", 
+        "🎯 Chọn Mô hình AI áp dụng để tính toán Hệ số:", 
         ["XGBoost", "Random Forest", "Neural Network"], 
         index=0
     )
     
     res = st.session_state.res_output
     
-    # SỬA LỖI MẤT BẢNG: Lọc chỉ lấy các tháng Tương lai, nếu không có thì lấy toàn bộ
-    if 'Thực Tế' in res.columns:
-        res_forecast = res[res['Thực Tế'].isnull()].copy()
-    else:
-        res_forecast = res.copy()
-        
-    if res_forecast.empty:
-        st.warning("⚠️ BỘ LỌC TỰ ĐỘNG: Toàn bộ dữ liệu bạn nhập đều là lịch sử (Đã có số Thực Tế). Hệ thống tạm thời hiển thị lại toàn bộ các tháng để bạn thao tác.")
-        res_forecast = res.copy()
-        
     # --- BẢNG 1: THỐNG KÊ SỐ NGÀY (CỦA TẤT CẢ CÁC THÁNG ĐỂ NHÌN TỔNG QUAN) ---
     st.write("🗓️ **BẢNG 1: Thống kê cơ cấu ngày của các tháng (Dữ liệu tham khảo)**")
     df_days_info = res[['Tháng', 'Năm', 'Số ngày', 'Ngày Thường', 'T2', 'T7', 'CN', 'Lễ', 'Tết']].copy()
     df_days_info['Tháng'] = df_days_info.apply(lambda x: f"{int(x['Tháng'])}/{int(x['Năm'])}", axis=1)
     df_days_info = df_days_info.drop(columns=['Năm'])
     st.dataframe(df_days_info.style.format(precision=0), hide_index=True, use_container_width=True)
+
+    # Lọc chỉ lấy các tháng Tương lai để tiến hành tinh chỉnh
+    if 'Thực Tế' in res.columns:
+        res_forecast = res[res['Thực Tế'].isnull()].copy()
+    else:
+        res_forecast = res.copy()
         
-    # --- BẢNG 2: BẢNG NHẬP LIỆU HỆ SỐ (CHỈ HIỂN THỊ THÁNG DỰ BÁO) ---
+    if res_forecast.empty:
+        st.warning("⚠️ Toàn bộ dữ liệu bạn nhập đều là lịch sử (Đã có số Thực Tế). Hệ thống tạm thời hiển thị lại toàn bộ các tháng để bạn thao tác test thử.")
+        res_forecast = res.copy()
+        
+    list_future_months = [f"{int(row['Tháng'])}/{int(row['Năm'])}" for idx, row in res_forecast.iterrows()]
+    
+    st.markdown("---")
+    st.subheader("🎯 TINH CHỈNH CỤ THỂ CHO TỪNG THÁNG DỰ BÁO")
+    
+    # MENU CHỌN THÁNG (Cốt lõi để ẩn/hiện)
+    selected_edit_month = st.selectbox("🗓️ Chọn tháng dự báo để tinh chỉnh hệ số và xem kết quả:", list_future_months)
+    
+    # Xác định dòng dữ liệu của tháng đang được chọn
+    selected_m = int(selected_edit_month.split('/')[0])
+    selected_y = int(selected_edit_month.split('/')[1])
+    res_target = res_forecast[(res_forecast['Tháng'] == selected_m) & (res_forecast['Năm'] == selected_y)].copy()
+
+    # --- BẢNG 2: BẢNG NHẬP LIỆU HỆ SỐ (CHỈ HIỂN THỊ 1 THÁNG ĐƯỢC CHỌN) ---
     edit_data = []
     orig_indices = []
-    for idx, row in res_forecast.iterrows():
+    for idx, row in res_target.iterrows():
         orig_indices.append(idx)
         edit_data.append({
             'Tháng': f"{int(row['Tháng'])}/{int(row['Năm'])}",
@@ -479,7 +489,7 @@ if 'res_output' in st.session_state:
         })
     df_edit = pd.DataFrame(edit_data)
     
-    st.write("✍️ **BẢNG 2: Tinh chỉnh Hệ số Ngày (Chỉ hiển thị các tháng cần Dự báo)**")
+    st.write(f"✍️ **BẢNG 2: Tinh chỉnh Hệ số Ngày cho {selected_edit_month}**")
     st.caption("Nhấp đúp vào các ô hệ số bên dưới để thay đổi. Kết quả ở Bảng 3 sẽ tự động cập nhật.")
     
     edited_df = st.data_editor(
@@ -487,7 +497,7 @@ if 'res_output' in st.session_state:
         disabled=['Tháng'],
         hide_index=True,
         use_container_width=True,
-        key=f"editor_k_{model_for_base}" 
+        key=f"editor_k_{model_for_base}_{selected_edit_month}" # Đổi key để chống xung đột cache
     )
     
     # --- BẢNG 3: BẢNG KẾT QUẢ TÍNH TOÁN LẠI TỪ BẢNG 2 ---
@@ -532,7 +542,7 @@ if 'res_output' in st.session_state:
         
     df_final = pd.DataFrame(final_results)
     
-    st.write("📊 **BẢNG 3: Sản lượng Từng Loại Ngày & Kết Quả Chốt Cuối Cùng (kWh)**")
+    st.write(f"📊 **BẢNG 3: Sản lượng Từng Loại Ngày & Kết Quả Chốt Cuối Cùng của {selected_edit_month} (kWh)**")
     st.dataframe(df_final.style.format({
         'Ngày Thường (T3-T6)': '{:,.0f}',
         'Thứ 2': '{:,.0f}',
@@ -542,13 +552,14 @@ if 'res_output' in st.session_state:
         'Tết Âm': '{:,.0f}',
         'Tổng Ban Đầu (AI)': '{:,.0f}',
         'TỔNG SAU ĐIỀU CHỈNH': '{:,.0f}'
-    }).apply(lambda x: ['background-color: #d4edda; font-weight: bold' if i == 'TỔNG SAU ĐIỀU CHỈNH' else ('background-color: #f8f9fa' if i == 'Tổng Ban Đầu (AI)' else '') for i in x.index], axis=1), use_container_width=True)
+    }).apply(lambda x: ['background-color: #d4edda; font-weight: bold' if i == 'TỔNG SAU ĐIỀU CHỈNH' else ('background-color: #f8f9fa' if i == 'Tổng Ban Đầu (AI)' else '') for i in x.index], axis=1), hide_index=True, use_container_width=True)
 
+    # --- BIỂU ĐỒ SO SÁNH (Chỉ hiển thị cho 1 tháng được chọn) ---
     if not df_final.empty:
         st.markdown("---")
-        st.subheader("📈 Biểu Đồ Phụ Tải Ngày Của Các Tháng Dự Báo")
+        st.subheader(f"📈 Biểu Đồ Phụ Tải Ngày Của {selected_edit_month}")
         
-        fig, ax = plt.subplots(figsize=(14, 6))
+        fig, ax = plt.subplots(figsize=(10, 5))
         
         months = df_final['Tháng']
         base_loads = df_final['Ngày Thường (T3-T6)']
@@ -563,10 +574,10 @@ if 'res_output' in st.session_state:
         ax.bar(x + width, cn_loads, width, label='Chủ Nhật', color='#c44e52')
         
         ax.set_ylabel('Sản lượng (kWh)')
-        ax.set_title('So sánh Cơ cấu Phụ tải Ngày theo Tháng')
+        ax.set_title('So sánh Cơ cấu Phụ tải Các Ngày trong Tuần')
         
         ax.set_xticks(x)
-        ax.set_xticklabels(months, rotation=45, ha='right')
+        ax.set_xticklabels(months)
         
         ax.legend()
         plt.tight_layout() 
