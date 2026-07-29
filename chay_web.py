@@ -73,15 +73,6 @@ DEFAULT_HOLIDAYS = [
     {"Năm": 2027, "Tháng": 5, "Tết Âm": 0, "Lễ Nhỏ": 1},
 ]
 
-def dem_ngay_nghi_cuoi_tuan(year, month):
-    num_days = calendar.monthrange(year, month)[1]
-    saturdays, sundays = 0, 0
-    for day in range(1, num_days + 1):
-        weekday = calendar.weekday(year, month, day)
-        if weekday == 5: saturdays += 1
-        elif weekday == 6: sundays += 1
-    return saturdays, sundays
-
 # ==============================================================================
 # 2. XỬ LÝ DỮ LIỆU & ĐẶC TRƯNG CẬP NHẬT
 # ==============================================================================
@@ -418,9 +409,6 @@ if f_train and f_input:
                 res['Neural Network'] = pred_nn
                 res['Random Forest'] = pred_rf
                 res['XGBoost'] = pred_xg
-                
-                # Tính trung bình 3 mô hình làm Tổng (Q)
-                res['Tổng AI (Q)'] = (pred_nn + pred_rf + pred_xg) / 3
 
                 if 'Tổng thương phẩm' in df_train_main.columns:
                     actual = df_train_main[['Năm', 'Tháng', 'Tổng thương phẩm']]
@@ -432,13 +420,13 @@ if f_train and f_input:
                 st.success("✅ Đã chạy xong Mô hình AI. Hãy chuyển xuống Bảng tinh chỉnh bên dưới!")
                 
                 st.subheader("📊 Kết Quả Dự Báo Tổng Của Từng Thuật Toán (Tham khảo)")
-                cols = ['Tháng', 'Năm', 'Thực Tế', 'Neural Network', 'Random Forest', 'XGBoost', 'Tổng AI (Q)']
+                cols = ['Tháng', 'Năm', 'Thực Tế', 'Neural Network', 'Random Forest', 'XGBoost']
                 cols = [c for c in cols if c in res.columns]
                 
                 st.dataframe(res[cols].style.format({
                     'Thực Tế': '{:,.0f}', 'Neural Network': '{:,.0f}', 
-                    'Random Forest': '{:,.0f}', 'XGBoost': '{:,.0f}', 'Tổng AI (Q)': '{:,.0f}'
-                }).apply(lambda x: ['background-color: #e6f2ff; font-weight: bold' if i == 'Tổng AI (Q)' else '' for i in x.index], axis=1), use_container_width=True)
+                    'Random Forest': '{:,.0f}', 'XGBoost': '{:,.0f}'
+                }), use_container_width=True)
                 
 # ==============================================================================
 # BẢNG TƯƠNG TÁC: CHỐT SỐ & TINH CHỈNH HỆ SỐ THEO NGƯỜI DÙNG
@@ -446,21 +434,29 @@ if f_train and f_input:
 if 'res_output' in st.session_state:
     st.markdown("---")
     st.header("🎛️ BẢNG TINH CHỈNH HỆ SỐ & CHỐT SẢN LƯỢNG CUỐI CÙNG")
+    
+    # Cho phép người dùng chọn mô hình muốn áp dụng
+    model_for_base = st.selectbox(
+        "🎯 Chọn Mô hình áp dụng để phân bổ ngày:", 
+        ["XGBoost", "Random Forest", "Neural Network"], 
+        index=0
+    )
+    
     st.write("""
     **Quy trình tính toán:**
-    1. AI tính trung bình cộng (Ensemble) để ra **Tổng AI Dự báo ($Q$)**.
+    1. Lấy kết quả từ mô hình **bạn vừa chọn ở trên** làm **Tổng Dự Báo Gốc ($Q$)**.
     2. Dựa trên số lượng ngày và **Hệ số mặc định**, hệ thống tính ngược ra **Sản lượng ngày cơ sở ($x$)**.
     3. Bạn có thể **sửa trực tiếp** các Hệ số $k$ trong Bảng 1. Ngay lập tức, Bảng 2 sẽ phân tách ngày và tính tổng cuối cùng!
     """)
     
     res = st.session_state.res_output
     
-    # Chuẩn bị dữ liệu cho Bảng Edit
+    # Chuẩn bị dữ liệu cho Bảng Edit dựa vào model được chọn
     edit_data = []
     for idx, row in res.iterrows():
         edit_data.append({
             'Tháng': f"{int(row['Tháng'])}/{int(row['Năm'])}",
-            'Tổng AI ($Q$)': row['Tổng AI (Q)'],
+            'Tổng Dự Báo Gốc ($Q$)': row[model_for_base],
             'k_T2': K_DICT_DEFAULT['T2'],
             'k_T7': K_DICT_DEFAULT['T7'],
             'k_CN': K_DICT_DEFAULT['CN'],
@@ -472,7 +468,7 @@ if 'res_output' in st.session_state:
     st.write("✍️ **BẢNG 1: Nhấp đúp vào các ô Hệ số để thay đổi theo ý muốn của bạn**")
     edited_df = st.data_editor(
         df_edit,
-        disabled=['Tháng', 'Tổng AI ($Q$)'],
+        disabled=['Tháng', 'Tổng Dự Báo Gốc ($Q$)'],
         hide_index=True,
         use_container_width=True,
         key="editor_k"
@@ -493,7 +489,7 @@ if 'res_output' in st.session_state:
         eq_days_standard = n_thuong + n_t2*K_DICT_DEFAULT['T2'] + n_t7*K_DICT_DEFAULT['T7'] + n_cn*K_DICT_DEFAULT['CN'] + n_le*K_DICT_DEFAULT['Le'] + n_tet*K_DICT_DEFAULT['Tet']
         
         # 2. Sản lượng 1 Ngày Cơ sở (x)
-        base_x = e_row['Tổng AI ($Q$)'] / eq_days_standard if eq_days_standard else 0
+        base_x = e_row['Tổng Dự Báo Gốc ($Q$)'] / eq_days_standard if eq_days_standard else 0
         
         # 3. Số ngày chuẩn MỚI (User sửa)
         eq_days_new = n_thuong + n_t2*e_row['k_T2'] + n_t7*e_row['k_T7'] + n_cn*e_row['k_CN'] + n_le*e_row['k_Lễ'] + n_tet*e_row['k_Tết']
@@ -510,7 +506,7 @@ if 'res_output' in st.session_state:
             'Ngày Lễ': base_x * e_row['k_Lễ'],
             'Tết Âm': base_x * e_row['k_Tết'],
             'TỔNG CUỐI CÙNG': final_total,
-            'Chênh lệch so AI': final_total - e_row['Tổng AI ($Q$)']
+            'Chênh lệch so Gốc': final_total - e_row['Tổng Dự Báo Gốc ($Q$)']
         })
         
     df_final = pd.DataFrame(final_results)
@@ -524,13 +520,15 @@ if 'res_output' in st.session_state:
         'Ngày Lễ': '{:,.0f}',
         'Tết Âm': '{:,.0f}',
         'TỔNG CUỐI CÙNG': '{:,.0f}',
-        'Chênh lệch so AI': '{:+,.0f}'
-    }).apply(lambda x: ['background-color: #d4edda; font-weight: bold' if i == 'TỔNG CUỐI CÙNG' else ('color: #d9534f; font-weight:bold' if i == 'Chênh lệch so AI' and x[i] < 0 else ('color: #5cb85c; font-weight:bold' if i == 'Chênh lệch so AI' and x[i] > 0 else '')) for i in x.index], axis=1), use_container_width=True)
+        'Chênh lệch so Gốc': '{:+,.0f}'
+    }).apply(lambda x: ['background-color: #d4edda; font-weight: bold' if i == 'TỔNG CUỐI CÙNG' else ('color: #d9534f; font-weight:bold' if i == 'Chênh lệch so Gốc' and x[i] < 0 else ('color: #5cb85c; font-weight:bold' if i == 'Chênh lệch so Gốc' and x[i] > 0 else '')) for i in x.index], axis=1), use_container_width=True)
 
     if not df_final.empty:
         st.markdown("---")
         st.subheader("📈 Biểu Đồ Phụ Tải Ngày Của Các Tháng Dự Báo")
-        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        # FIX LỖI HIỂN THỊ ĐÈ CHỮ Ở TRỤC X: Tăng kích thước (figsize) và xoay nghiêng chữ
+        fig, ax = plt.subplots(figsize=(14, 6))
         
         months = df_final['Tháng']
         base_loads = df_final['Ngày Thường (T3-T6)']
@@ -546,9 +544,13 @@ if 'res_output' in st.session_state:
         
         ax.set_ylabel('Sản lượng (kWh)')
         ax.set_title('So sánh Cơ cấu Phụ tải Ngày theo Tháng')
+        
+        # Cập nhật trục X để không bị lỗi đè chữ
         ax.set_xticks(x)
-        ax.set_xticklabels(months)
+        ax.set_xticklabels(months, rotation=45, ha='right')
+        
         ax.legend()
+        plt.tight_layout() # Lệnh này giúp các nhãn trục X không bị cắt lẹm ra ngoài khung ảnh
         st.pyplot(fig)
 
 # ==============================================================================
@@ -619,7 +621,7 @@ if f_train and f_input:
 # ==============================================================================
 st.markdown("---")
 if 'res_output' in st.session_state:
-    st.header("🛡️ GIẢI TRÌNH LOGIC DỰ BÁO (Bản Gốc AI)")
+    st.header("🛡️ GIẢI TRÌNH LOGIC DỰ BÁO (Dựa trên mô hình bạn chọn)")
     
     r = st.session_state.res_output
     df_p = r[['Tháng', 'Năm']].copy()
@@ -627,28 +629,28 @@ if 'res_output' in st.session_state:
     # Xu hướng
     df_p['Xu hướng nền (A)'] = st.session_state.trend_val
     
-    # Lấy Tổng AI làm cơ sở
-    avg_ml = r['Tổng AI (Q)']
+    # Lấy Kết quả dự báo gốc từ mô hình đang được chọn (thay vì trung bình cộng)
+    model_val = r[model_for_base]
     
     # Biến động do ML
-    df_p['Biến động ML (B)'] = avg_ml - df_p['Xu hướng nền (A)']
+    df_p['Biến động ML (B)'] = model_val - df_p['Xu hướng nền (A)']
     
     if 'Thực Tế' in r.columns:
         df_p['Thực Tế (E)'] = r['Thực Tế']
         
-    df_p['DỰ BÁO CUỐI CÙNG'] = avg_ml
+    df_p['DỰ BÁO CỦA MÔ HÌNH'] = model_val
     
     format_dict = {
         'Xu hướng nền (A)': '{:,.0f}', 
         'Biến động ML (B)': '{:+,.0f}', 
-        'DỰ BÁO CUỐI CÙNG': '{:,.0f}',
+        'DỰ BÁO CỦA MÔ HÌNH': '{:,.0f}',
         'Thực Tế (E)': '{:,.0f}'
     }
     
-    cols_to_show = [c for c in ['Tháng', 'Năm', 'Thực Tế (E)', 'Xu hướng nền (A)', 'Biến động ML (B)', 'DỰ BÁO CUỐI CÙNG'] if c in df_p.columns]
+    cols_to_show = [c for c in ['Tháng', 'Năm', 'Thực Tế (E)', 'Xu hướng nền (A)', 'Biến động ML (B)', 'DỰ BÁO CỦA MÔ HÌNH'] if c in df_p.columns]
     
     st.dataframe(df_p[cols_to_show].style.format(format_dict).apply(
-        lambda x: ['background-color: #f0f2f6' if i == 'DỰ BÁO CUỐI CÙNG' else '' for i in x.index], axis=1
+        lambda x: ['background-color: #f0f2f6' if i == 'DỰ BÁO CỦA MÔ HÌNH' else '' for i in x.index], axis=1
     ), use_container_width=True)
     
-    st.caption("🔍 **A**: Tăng trưởng tự nhiên dựa trên hồi quy 3 năm | **B**: Sai lệch do thời tiết/lễ tết do máy học tự tìm | **Tổng chốt (Q) = A + B**")
+    st.caption("🔍 **A**: Tăng trưởng tự nhiên dựa trên hồi quy 3 năm | **B**: Sai lệch do thời tiết/lễ tết do máy học tự tìm | **Dự báo của Mô hình (Q) = A + B**")
