@@ -312,12 +312,12 @@ with st.sidebar:
     st.write("### ⚖️ Hệ số Ngày Mặc định (k)")
     c_k1, c_k2 = st.columns(2)
     with c_k1:
-        k_t2 = st.number_input("Hệ số T2", value=0.96, step=0.01)
-        k_t7 = st.number_input("Hệ số T7", value=0.96, step=0.01)
-        k_cn = st.number_input("Hệ số CN", value=0.85, step=0.01)
+        k_t2 = st.number_input("Hệ số T2", value=0.95, step=0.01)
+        k_t7 = st.number_input("Hệ số T7", value=0.94, step=0.01)
+        k_cn = st.number_input("Hệ số CN", value=0.79, step=0.01)
     with c_k2:
-        k_le = st.number_input("Hệ số Lễ", value=0.80, step=0.01)
-        k_tet = st.number_input("Hệ số Tết", value=0.55, step=0.01)
+        k_le = st.number_input("Hệ số Lễ", value=0.56, step=0.01)
+        k_tet = st.number_input("Hệ số Tết", value=0.40, step=0.01)
         k_catdien = st.number_input("Hệ số Cắt điện", value=0.50, step=0.01)
         
     K_DICT_DEFAULT = {'T2': k_t2, 'T7': k_t7, 'CN': k_cn, 'Le': k_le, 'Tet': k_tet, 'CatDien': k_catdien}
