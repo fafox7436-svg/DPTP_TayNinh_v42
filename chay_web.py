@@ -409,9 +409,6 @@ if f_train and f_input:
                 res['Neural Network'] = pred_nn
                 res['Random Forest'] = pred_rf
                 res['XGBoost'] = pred_xg
-                
-                # Tính trung bình 3 mô hình làm Tổng (Q)
-                res['Tổng AI (Q)'] = (pred_nn + pred_rf + pred_xg) / 3
 
                 if 'Tổng thương phẩm' in df_train_main.columns:
                     actual = df_train_main[['Năm', 'Tháng', 'Tổng thương phẩm']]
@@ -423,13 +420,13 @@ if f_train and f_input:
                 st.success("✅ Đã chạy xong Mô hình AI. Hãy chuyển xuống Bảng tinh chỉnh bên dưới!")
                 
                 st.subheader("📊 Kết Quả Dự Báo Tổng Của Từng Thuật Toán (Tham khảo)")
-                cols = ['Tháng', 'Năm', 'Thực Tế', 'Neural Network', 'Random Forest', 'XGBoost', 'Tổng AI (Q)']
+                cols = ['Tháng', 'Năm', 'Thực Tế', 'Neural Network', 'Random Forest', 'XGBoost']
                 cols = [c for c in cols if c in res.columns]
                 
                 st.dataframe(res[cols].style.format({
                     'Thực Tế': '{:,.0f}', 'Neural Network': '{:,.0f}', 
-                    'Random Forest': '{:,.0f}', 'XGBoost': '{:,.0f}', 'Tổng AI (Q)': '{:,.0f}'
-                }).apply(lambda x: ['background-color: #e6f2ff; font-weight: bold' if i == 'Tổng AI (Q)' else '' for i in x.index], axis=1), use_container_width=True)
+                    'Random Forest': '{:,.0f}', 'XGBoost': '{:,.0f}'
+                }), use_container_width=True)
                 
 # ==============================================================================
 # BẢNG TƯƠNG TÁC: CHỐT SỐ & TINH CHỈNH HỆ SỐ THEO NGƯỜI DÙNG
@@ -454,126 +451,130 @@ if 'res_output' in st.session_state:
     
     res = st.session_state.res_output
     
-    # BỘ LỌC THÔNG MINH: Chỉ lấy các tháng chưa có số Thực Tế (Tháng tương lai cần dự báo)
+    # SỬA LỖI MẤT BẢNG: Lọc chỉ lấy các tháng Tương lai, nếu không có thì lấy toàn bộ
     if 'Thực Tế' in res.columns:
         res_forecast = res[res['Thực Tế'].isnull()].copy()
     else:
         res_forecast = res.copy()
         
     if res_forecast.empty:
-        st.info("💡 Tất cả các tháng trong file Input đều đã có số Thực Tế. Vui lòng nhập dữ liệu của các tháng tương lai để tinh chỉnh dự báo.")
-    else:
-        # Chuẩn bị dữ liệu cho Bảng Edit dựa vào model được chọn (CHỈ hiễn thị tháng dự báo)
-        edit_data = []
-        orig_indices = [] # Theo dõi chỉ mục gốc để ánh xạ lại
-        for idx, row in res_forecast.iterrows():
-            orig_indices.append(idx)
-            edit_data.append({
-                'Tháng': f"{int(row['Tháng'])}/{int(row['Năm'])}",
-                'Tổng Dự Báo Gốc ($Q$)': row[model_for_base],
-                'k_T2': K_DICT_DEFAULT['T2'],
-                'k_T7': K_DICT_DEFAULT['T7'],
-                'k_CN': K_DICT_DEFAULT['CN'],
-                'k_Lễ': K_DICT_DEFAULT['Le'],
-                'k_Tết': K_DICT_DEFAULT['Tet']
-            })
-        df_edit = pd.DataFrame(edit_data)
+        st.warning("⚠️ BỘ LỌC TỰ ĐỘNG: Toàn bộ dữ liệu bạn nhập đều là lịch sử (Đã có số Thực Tế). Hệ thống tạm thời hiển thị lại toàn bộ các tháng để bạn thao tác.")
+        res_forecast = res.copy() # Trả lại toàn bộ dữ liệu để bảng không bị trắng
         
-        st.write("✍️ **BẢNG 1: Nhấp đúp vào các ô Hệ số để thay đổi theo ý muốn của bạn**")
-        edited_df = st.data_editor(
-            df_edit,
-            column_config={
-                "Tổng Dự Báo Gốc ($Q$)": st.column_config.NumberColumn(
-                    "Tổng Dự Báo Gốc ($Q$)",
-                    format="%d" # Ép số lượng hiển thị thành số nguyên chuẩn, không có chữ "e+"
-                )
-            },
-            disabled=['Tháng', 'Tổng Dự Báo Gốc ($Q$)'],
-            hide_index=True,
-            use_container_width=True,
-            key="editor_k"
-        )
+    # Chuẩn bị dữ liệu cho Bảng Edit dựa vào model được chọn (CHỈ hiển thị tháng dự báo)
+    edit_data = []
+    orig_indices = [] # Theo dõi chỉ mục gốc để ánh xạ lại
+    for idx, row in res_forecast.iterrows():
+        orig_indices.append(idx)
+        edit_data.append({
+            'Tháng': f"{int(row['Tháng'])}/{int(row['Năm'])}",
+            'Tổng Dự Báo Gốc ($Q$)': row[model_for_base],
+            'k_T2': K_DICT_DEFAULT['T2'],
+            'k_T7': K_DICT_DEFAULT['T7'],
+            'k_CN': K_DICT_DEFAULT['CN'],
+            'k_Lễ': K_DICT_DEFAULT['Le'],
+            'k_Tết': K_DICT_DEFAULT['Tet']
+        })
+    df_edit = pd.DataFrame(edit_data)
+    
+    st.write("✍️ **BẢNG 1: Nhấp đúp vào các ô Hệ số để thay đổi theo ý muốn của bạn**")
+    
+    # KHẮC PHỤC LỖI HIỂN THỊ CHỮ e+07: Ép định dạng NumberColumn thành số nguyên
+    # SỬA LỖI TRẮNG BẢNG DO CACHE: Thêm Key linh động phụ thuộc vào model đang chọn
+    edited_df = st.data_editor(
+        df_edit,
+        column_config={
+            "Tổng Dự Báo Gốc ($Q$)": st.column_config.NumberColumn(
+                "Tổng Dự Báo Gốc ($Q$)",
+                format="%d" 
+            )
+        },
+        disabled=['Tháng', 'Tổng Dự Báo Gốc ($Q$)'],
+        hide_index=True,
+        use_container_width=True,
+        key=f"editor_k_{model_for_base}" 
+    )
+    
+    # Logic tính toán lại từ Bảng 1 đổ xuống Bảng 2
+    final_results = []
+    for i, e_row in edited_df.iterrows():
+        orig_idx = orig_indices[i]
+        r_orig = res.loc[orig_idx]
         
-        # Logic tính toán lại từ Bảng 1 đổ xuống Bảng 2
-        final_results = []
-        for i, e_row in edited_df.iterrows():
-            orig_idx = orig_indices[i]
-            r_orig = res.loc[orig_idx]
-            
-            n_thuong = r_orig['Ngày Thường']
-            n_t2 = r_orig['T2']
-            n_t7 = r_orig['T7']
-            n_cn = r_orig['CN']
-            n_le = r_orig['Lễ']
-            n_tet = r_orig['Tết']
-            
-            # 1. Số ngày chuẩn cũ AI đã dùng
-            eq_days_standard = n_thuong + n_t2*K_DICT_DEFAULT['T2'] + n_t7*K_DICT_DEFAULT['T7'] + n_cn*K_DICT_DEFAULT['CN'] + n_le*K_DICT_DEFAULT['Le'] + n_tet*K_DICT_DEFAULT['Tet']
-            
-            # 2. Sản lượng 1 Ngày Cơ sở (x)
-            base_x = e_row['Tổng Dự Báo Gốc ($Q$)'] / eq_days_standard if eq_days_standard else 0
-            
-            # 3. Số ngày chuẩn MỚI (User sửa)
-            eq_days_new = n_thuong + n_t2*e_row['k_T2'] + n_t7*e_row['k_T7'] + n_cn*e_row['k_CN'] + n_le*e_row['k_Lễ'] + n_tet*e_row['k_Tết']
-            
-            # 4. Tính Chốt Cuối
-            final_total = base_x * eq_days_new
-            
-            final_results.append({
-                'Tháng': e_row['Tháng'],
-                'Ngày Thường (T3-T6)': base_x,
-                'Thứ 2': base_x * e_row['k_T2'],
-                'Thứ 7': base_x * e_row['k_T7'],
-                'Chủ Nhật': base_x * e_row['k_CN'],
-                'Ngày Lễ': base_x * e_row['k_Lễ'],
-                'Tết Âm': base_x * e_row['k_Tết'],
-                'TỔNG CUỐI CÙNG': final_total,
-                'Chênh lệch so Gốc': final_total - e_row['Tổng Dự Báo Gốc ($Q$)']
-            })
-            
-        df_final = pd.DataFrame(final_results)
+        n_thuong = r_orig['Ngày Thường']
+        n_t2 = r_orig['T2']
+        n_t7 = r_orig['T7']
+        n_cn = r_orig['CN']
+        n_le = r_orig['Lễ']
+        n_tet = r_orig['Tết']
         
-        st.write("📊 **BẢNG 2: Cơ cấu Sản lượng Từng Loại Ngày & Kết Quả Chốt Cuối (kWh)**")
-        st.dataframe(df_final.style.format({
-            'Ngày Thường (T3-T6)': '{:,.0f}',
-            'Thứ 2': '{:,.0f}',
-            'Thứ 7': '{:,.0f}',
-            'Chủ Nhật': '{:,.0f}',
-            'Ngày Lễ': '{:,.0f}',
-            'Tết Âm': '{:,.0f}',
-            'TỔNG CUỐI CÙNG': '{:,.0f}',
-            'Chênh lệch so Gốc': '{:+,.0f}'
-        }).apply(lambda x: ['background-color: #d4edda; font-weight: bold' if i == 'TỔNG CUỐI CÙNG' else ('color: #d9534f; font-weight:bold' if i == 'Chênh lệch so Gốc' and x[i] < 0 else ('color: #5cb85c; font-weight:bold' if i == 'Chênh lệch so Gốc' and x[i] > 0 else '')) for i in x.index], axis=1), use_container_width=True)
+        # 1. Số ngày chuẩn cũ AI đã dùng
+        eq_days_standard = n_thuong + n_t2*K_DICT_DEFAULT['T2'] + n_t7*K_DICT_DEFAULT['T7'] + n_cn*K_DICT_DEFAULT['CN'] + n_le*K_DICT_DEFAULT['Le'] + n_tet*K_DICT_DEFAULT['Tet']
+        
+        # 2. Sản lượng 1 Ngày Cơ sở (x)
+        base_x = e_row['Tổng Dự Báo Gốc ($Q$)'] / eq_days_standard if eq_days_standard else 0
+        
+        # 3. Số ngày chuẩn MỚI (User sửa)
+        eq_days_new = n_thuong + n_t2*e_row['k_T2'] + n_t7*e_row['k_T7'] + n_cn*e_row['k_CN'] + n_le*e_row['k_Lễ'] + n_tet*e_row['k_Tết']
+        
+        # 4. Tính Chốt Cuối
+        final_total = base_x * eq_days_new
+        
+        final_results.append({
+            'Tháng': e_row['Tháng'],
+            'Ngày Thường (T3-T6)': base_x,
+            'Thứ 2': base_x * e_row['k_T2'],
+            'Thứ 7': base_x * e_row['k_T7'],
+            'Chủ Nhật': base_x * e_row['k_CN'],
+            'Ngày Lễ': base_x * e_row['k_Lễ'],
+            'Tết Âm': base_x * e_row['k_Tết'],
+            'TỔNG CUỐI CÙNG': final_total,
+            'Chênh lệch so Gốc': final_total - e_row['Tổng Dự Báo Gốc ($Q$)']
+        })
+        
+    df_final = pd.DataFrame(final_results)
+    
+    st.write("📊 **BẢNG 2: Cơ cấu Sản lượng Từng Loại Ngày & Kết Quả Chốt Cuối (kWh)**")
+    st.dataframe(df_final.style.format({
+        'Ngày Thường (T3-T6)': '{:,.0f}',
+        'Thứ 2': '{:,.0f}',
+        'Thứ 7': '{:,.0f}',
+        'Chủ Nhật': '{:,.0f}',
+        'Ngày Lễ': '{:,.0f}',
+        'Tết Âm': '{:,.0f}',
+        'TỔNG CUỐI CÙNG': '{:,.0f}',
+        'Chênh lệch so Gốc': '{:+,.0f}'
+    }).apply(lambda x: ['background-color: #d4edda; font-weight: bold' if i == 'TỔNG CUỐI CÙNG' else ('color: #d9534f; font-weight:bold' if i == 'Chênh lệch so Gốc' and x[i] < 0 else ('color: #5cb85c; font-weight:bold' if i == 'Chênh lệch so Gốc' and x[i] > 0 else '')) for i in x.index], axis=1), use_container_width=True)
 
-        if not df_final.empty:
-            st.markdown("---")
-            st.subheader("📈 Biểu Đồ Phụ Tải Ngày Của Các Tháng Dự Báo")
-            
-            # FIX LỖI HIỂN THỊ ĐÈ CHỮ Ở TRỤC X: Tăng figsize và xoay nhãn 45 độ
-            fig, ax = plt.subplots(figsize=(14, 6))
-            
-            months = df_final['Tháng']
-            base_loads = df_final['Ngày Thường (T3-T6)']
-            t7_loads = df_final['Thứ 7']
-            cn_loads = df_final['Chủ Nhật']
-            
-            x = np.arange(len(months))
-            width = 0.25
-            
-            ax.bar(x - width, base_loads, width, label='Ngày Thường (T3-T6)', color='#4c72b0')
-            ax.bar(x, t7_loads, width, label='Thứ 7', color='#dd8452')
-            ax.bar(x + width, cn_loads, width, label='Chủ Nhật', color='#c44e52')
-            
-            ax.set_ylabel('Sản lượng (kWh)')
-            ax.set_title('So sánh Cơ cấu Phụ tải Ngày theo Tháng')
-            
-            # Cập nhật trục X để không bị lỗi đè chữ
-            ax.set_xticks(x)
-            ax.set_xticklabels(months, rotation=45, ha='right')
-            
-            ax.legend()
-            plt.tight_layout() # Giúp các nhãn trục X không bị cắt lẹm ra ngoài khung ảnh
-            st.pyplot(fig)
+    if not df_final.empty:
+        st.markdown("---")
+        st.subheader("📈 Biểu Đồ Phụ Tải Ngày Của Các Tháng Dự Báo")
+        
+        # FIX LỖI HIỂN THỊ ĐÈ CHỮ Ở TRỤC X: Tăng figsize và xoay nhãn 45 độ
+        fig, ax = plt.subplots(figsize=(14, 6))
+        
+        months = df_final['Tháng']
+        base_loads = df_final['Ngày Thường (T3-T6)']
+        t7_loads = df_final['Thứ 7']
+        cn_loads = df_final['Chủ Nhật']
+        
+        x = np.arange(len(months))
+        width = 0.25
+        
+        ax.bar(x - width, base_loads, width, label='Ngày Thường (T3-T6)', color='#4c72b0')
+        ax.bar(x, t7_loads, width, label='Thứ 7', color='#dd8452')
+        ax.bar(x + width, cn_loads, width, label='Chủ Nhật', color='#c44e52')
+        
+        ax.set_ylabel('Sản lượng (kWh)')
+        ax.set_title('So sánh Cơ cấu Phụ tải Ngày theo Tháng')
+        
+        # Cập nhật trục X để không bị lỗi đè chữ
+        ax.set_xticks(x)
+        ax.set_xticklabels(months, rotation=45, ha='right')
+        
+        ax.legend()
+        plt.tight_layout() # Giúp các nhãn trục X không bị cắt lẹm ra ngoài khung ảnh
+        st.pyplot(fig)
 
 # ==============================================================================
 # 4. MÁY SOI SEED
