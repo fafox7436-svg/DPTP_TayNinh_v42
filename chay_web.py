@@ -134,7 +134,6 @@ def xu_ly_du_lieu_dinh_tinh(api_key, input_data, target_model_name, provider):
         if val != 0.0: return val, f"{status}✅ AI Đã xong (Tự bắt số)!", res
         return 0.0, f"⚠️ AI không tìm thấy số.", res
     except Exception as e:
-        if "429" in str(e): return 0.0, "⚠️ Hết hạn mức (Quota).", "Hết Quota"
         return 0.0, f"❌ Lỗi AI: {str(e)[:50]}...", "Lỗi"
 
 def chuan_hoa_ten_cot(df):
@@ -143,7 +142,8 @@ def chuan_hoa_ten_cot(df):
     col_map = {
         'month': 'Tháng', 'thang': 'Tháng', 'tháng': 'Tháng', 'year': 'Năm', 'nam': 'Năm', 'năm': 'Năm',
         'tổng thương phẩm': 'Tổng thương phẩm', 'tong thuong pham': 'Tổng thương phẩm', 'sản lượng': 'Tổng thương phẩm',
-        'nhiệt độ tb': 'Nhiệt độ TB', 'nhiet do tb': 'Nhiệt độ TB', 'độ ẩm': 'Độ ẩm', 'do am': 'Độ ẩm', 'số ngày': 'Số ngày'
+        'nhiệt độ tb': 'Nhiệt độ TB', 'nhiet do tb': 'Nhiệt độ TB', 'độ ẩm': 'Độ ẩm', 'do am': 'Độ ẩm', 'số ngày': 'Số ngày',
+        'cắt điện': 'Số ngày cắt điện', 'cat dien': 'Số ngày cắt điện', 'số ngày cắt điện': 'Số ngày cắt điện'
     }
     new_cols = {}
     for col in df.columns:
@@ -181,6 +181,11 @@ def kiem_tra_chat_luong(df, ten_file):
 def tao_dac_trung(df, holidays_map):
     df['Mua_Nong'] = df['Tháng'].apply(lambda x: 1 if x in [3,4,5] else 0)
     df['Mua_Mua'] = df['Tháng'].apply(lambda x: 1 if x in [6,7,8,9,10,11] else 0)
+    
+    # Mặc định số ngày cắt điện = 0 nếu file excel không có cột này
+    if 'Số ngày cắt điện' not in df.columns:
+        df['Số ngày cắt điện'] = 0
+        
     def get_calendar_info(row):
         y, m = int(row['Năm']), int(row['Tháng'])
         num_days = calendar.monthrange(y, m)[1]
@@ -191,11 +196,14 @@ def tao_dac_trung(df, holidays_map):
             elif wd == 5: t7 += 1
             elif wd == 6: cn += 1
         tet_am, le_nho = holidays_map.get((y, m), (0, 0))
-        so_ngay_thuong = num_days - t2 - t7 - cn - tet_am - le_nho
-        if so_ngay_thuong < 0: so_ngay_thuong = 0
-        return pd.Series([so_ngay_thuong, t2, t7, cn, tet_am, le_nho])
         
-    df[['So_Ngay_Thuong', 'So_Ngay_T2', 'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Tet_Am', 'So_Ngay_Le_Nho']] = df.apply(get_calendar_info, axis=1)
+        so_ngay_cat_dien = int(row.get('Số ngày cắt điện', 0))
+        
+        so_ngay_thuong = num_days - t2 - t7 - cn - tet_am - le_nho - so_ngay_cat_dien
+        if so_ngay_thuong < 0: so_ngay_thuong = 0
+        return pd.Series([so_ngay_thuong, t2, t7, cn, tet_am, le_nho, so_ngay_cat_dien])
+        
+    df[['So_Ngay_Thuong', 'So_Ngay_T2', 'So_Ngay_T7', 'So_Ngay_CN', 'So_Ngay_Tet_Am', 'So_Ngay_Le_Nho', 'So_Ngay_Cat_Dien']] = df.apply(get_calendar_info, axis=1)
     df['Bien_Ngoai_Sinh'] = 0
     return df
 
@@ -213,19 +221,20 @@ def chay_mo_hinh_goc(df_train, df_input, holidays_map, k_dict, seed=42):
     df_train['Time_Index'] = df_train.apply(create_time_index, axis=1)
     df_input['Time_Index'] = df_input.apply(create_time_index, axis=1)
 
-    # Tính TỔNG NGÀY CƠ SỞ TƯƠNG ĐƯƠNG dựa trên hệ số k
+    # Tích hợp thêm Hệ số Cắt điện vào tính Tổng Ngày Tương Đương
     def calc_equiv_days(df):
         return (df['So_Ngay_Thuong'] * 1.0 + 
                 df['So_Ngay_T2'] * k_dict['T2'] + 
                 df['So_Ngay_T7'] * k_dict['T7'] + 
                 df['So_Ngay_CN'] * k_dict['CN'] + 
                 df['So_Ngay_Le_Nho'] * k_dict['Le'] + 
-                df['So_Ngay_Tet_Am'] * k_dict['Tet'])
+                df['So_Ngay_Tet_Am'] * k_dict['Tet'] +
+                df['So_Ngay_Cat_Dien'] * k_dict['CatDien'])
                 
     df_train['Ngay_Tuong_Duong'] = calc_equiv_days(df_train)
     df_input['Ngay_Tuong_Duong'] = calc_equiv_days(df_input)
 
-    # Chạy mô hình học trên Sản lượng Ngày Tương đương
+    # Chạy AI
     features = ['Tháng', 'Năm', 'Nhiệt độ TB', 'Độ ẩm', 'Mua_Nong', 'Mua_Mua', 'Bien_Ngoai_Sinh']
     valid_cols = [c for c in features if c in df_train.columns and c in df_input.columns]
     
@@ -309,8 +318,9 @@ with st.sidebar:
     with c_k2:
         k_le = st.number_input("Hệ số Lễ", value=0.80, step=0.01)
         k_tet = st.number_input("Hệ số Tết", value=0.55, step=0.01)
+        k_catdien = st.number_input("Hệ số Cắt điện", value=0.50, step=0.01)
         
-    K_DICT_DEFAULT = {'T2': k_t2, 'T7': k_t7, 'CN': k_cn, 'Le': k_le, 'Tet': k_tet}
+    K_DICT_DEFAULT = {'T2': k_t2, 'T7': k_t7, 'CN': k_cn, 'Le': k_le, 'Tet': k_tet, 'CatDien': k_catdien}
     
     st.markdown("---")
     seed_val = st.number_input("Random Seed", value=42)
@@ -397,6 +407,11 @@ if f_train and f_input:
                 pred_nn, pred_rf, pred_xg, p_trend = chay_mo_hinh_goc(df_train_main, df_input_main, USER_HOLIDAYS_MAP, K_DICT_DEFAULT, seed_val)
                 
                 res = df_input_main[['Năm', 'Tháng', 'Số ngày']].copy()
+                if 'Số ngày cắt điện' in df_input_main.columns:
+                    res['Số ngày cắt điện'] = df_input_main['Số ngày cắt điện']
+                else:
+                    res['Số ngày cắt điện'] = 0
+                    
                 df_check = tao_dac_trung(df_input_main.copy(), USER_HOLIDAYS_MAP)
                 
                 res['Ngày Thường'] = df_check['So_Ngay_Thuong']
@@ -405,6 +420,7 @@ if f_train and f_input:
                 res['CN'] = df_check['So_Ngay_CN']
                 res['Lễ'] = df_check['So_Ngay_Le_Nho']
                 res['Tết'] = df_check['So_Ngay_Tet_Am']
+                res['Cắt điện'] = df_check['So_Ngay_Cat_Dien']
                 
                 res['Neural Network'] = pred_nn
                 res['Random Forest'] = pred_rf
@@ -419,14 +435,23 @@ if f_train and f_input:
                 st.session_state.trend_val = p_trend
                 st.success("✅ Đã chạy xong Mô hình AI. Hãy chuyển xuống Bảng tinh chỉnh bên dưới!")
                 
-                st.subheader("📊 Kết Quả Dự Báo Tổng Của Từng Thuật Toán (Tham khảo)")
-                cols = ['Tháng', 'Năm', 'Thực Tế', 'Neural Network', 'Random Forest', 'XGBoost']
-                cols = [c for c in cols if c in res.columns]
+                # --- PHỤC HỒI BIỂU ĐỒ SO SÁNH 3 MÔ HÌNH ---
+                st.subheader("📈 Biểu Đồ So Sánh Các Mô Hình AI")
+                res_plot = res.copy()
+                res_plot['Date'] = pd.to_datetime(dict(year=res_plot['Năm'], month=res_plot['Tháng'], day=1))
                 
-                st.dataframe(res[cols].style.format({
-                    'Thực Tế': '{:,.0f}', 'Neural Network': '{:,.0f}', 
-                    'Random Forest': '{:,.0f}', 'XGBoost': '{:,.0f}'
-                }), use_container_width=True)
+                fig1, ax1 = plt.subplots(figsize=(14, 5))
+                ax1.plot(res_plot['Date'], res_plot['Neural Network'], 'o-', label='Neural Network', color='blue', alpha=0.7)
+                ax1.plot(res_plot['Date'], res_plot['Random Forest'], 's--', label='Random Forest', color='green', alpha=0.7)
+                ax1.plot(res_plot['Date'], res_plot['XGBoost'], '^-.', label='XGBoost', color='purple', alpha=0.7)
+                
+                if 'Thực Tế' in res_plot.columns:
+                    mask = res_plot['Thực Tế'].notnull()
+                    ax1.plot(res_plot.loc[mask, 'Date'], res_plot.loc[mask, 'Thực Tế'], 'ko', label='Thực Tế', markersize=8)
+                    
+                ax1.set_ylabel("Sản lượng (kWh)")
+                ax1.legend(); ax1.grid(True, alpha=0.3)
+                st.pyplot(fig1)
                 
 # ==============================================================================
 # BẢNG TƯƠNG TÁC: CHỐT SỐ & TINH CHỈNH HỆ SỐ THEO NGƯỜI DÙNG (CẤU TRÚC 3 BẢNG)
@@ -435,7 +460,6 @@ if 'res_output' in st.session_state:
     st.markdown("---")
     st.header("🎛️ BẢNG TINH CHỈNH HỆ SỐ & CHỐT SẢN LƯỢNG CUỐI CÙNG")
     
-    # Cho phép người dùng chọn mô hình muốn áp dụng
     model_for_base = st.selectbox(
         "🎯 Chọn Mô hình AI áp dụng để tính toán Hệ số:", 
         ["XGBoost", "Random Forest", "Neural Network"], 
@@ -444,21 +468,20 @@ if 'res_output' in st.session_state:
     
     res = st.session_state.res_output
     
-    # --- BẢNG 1: THỐNG KÊ SỐ NGÀY (CỦA TẤT CẢ CÁC THÁNG ĐỂ NHÌN TỔNG QUAN) ---
+    # --- BẢNG 1: THỐNG KÊ SỐ NGÀY TỔNG QUAN ---
     st.write("🗓️ **BẢNG 1: Thống kê cơ cấu ngày của các tháng (Dữ liệu tham khảo)**")
-    df_days_info = res[['Tháng', 'Năm', 'Số ngày', 'Ngày Thường', 'T2', 'T7', 'CN', 'Lễ', 'Tết']].copy()
+    df_days_info = res[['Tháng', 'Năm', 'Số ngày', 'Ngày Thường', 'T2', 'T7', 'CN', 'Lễ', 'Tết', 'Cắt điện']].copy()
     df_days_info['Tháng'] = df_days_info.apply(lambda x: f"{int(x['Tháng'])}/{int(x['Năm'])}", axis=1)
     df_days_info = df_days_info.drop(columns=['Năm'])
     st.dataframe(df_days_info.style.format(precision=0), hide_index=True, use_container_width=True)
 
-    # Lọc chỉ lấy các tháng Tương lai để tiến hành tinh chỉnh
     if 'Thực Tế' in res.columns:
         res_forecast = res[res['Thực Tế'].isnull()].copy()
     else:
         res_forecast = res.copy()
         
     if res_forecast.empty:
-        st.warning("⚠️ Toàn bộ dữ liệu bạn nhập đều là lịch sử (Đã có số Thực Tế). Hệ thống tạm thời hiển thị lại toàn bộ các tháng để bạn thao tác test thử.")
+        st.warning("⚠️ BỘ LỌC: Toàn bộ dữ liệu bạn nhập đều là lịch sử. Hệ thống hiển thị lại toàn bộ để bạn test thử.")
         res_forecast = res.copy()
         
     list_future_months = [f"{int(row['Tháng'])}/{int(row['Năm'])}" for idx, row in res_forecast.iterrows()]
@@ -466,66 +489,75 @@ if 'res_output' in st.session_state:
     st.markdown("---")
     st.subheader("🎯 TINH CHỈNH CỤ THỂ CHO TỪNG THÁNG DỰ BÁO")
     
-    # MENU CHỌN THÁNG (Cốt lõi để ẩn/hiện)
     selected_edit_month = st.selectbox("🗓️ Chọn tháng dự báo để tinh chỉnh hệ số và xem kết quả:", list_future_months)
     
-    # Xác định dòng dữ liệu của tháng đang được chọn
     selected_m = int(selected_edit_month.split('/')[0])
     selected_y = int(selected_edit_month.split('/')[1])
     res_target = res_forecast[(res_forecast['Tháng'] == selected_m) & (res_forecast['Năm'] == selected_y)].copy()
 
-    # --- BẢNG 2: BẢNG NHẬP LIỆU HỆ SỐ (CHỈ HIỂN THỊ 1 THÁNG ĐƯỢC CHỌN) ---
+    # --- BẢNG 2: NHẬP LIỆU HỆ SỐ & NGÀY CẮT ĐIỆN CHO 1 THÁNG ---
     edit_data = []
     orig_indices = []
     for idx, row in res_target.iterrows():
         orig_indices.append(idx)
         edit_data.append({
             'Tháng': f"{int(row['Tháng'])}/{int(row['Năm'])}",
+            'Ngày Cắt Điện': int(row['Cắt điện']), # User có thể nhập số ngày cắt điện ở đây
             'k_T2': K_DICT_DEFAULT['T2'],
             'k_T7': K_DICT_DEFAULT['T7'],
             'k_CN': K_DICT_DEFAULT['CN'],
             'k_Lễ': K_DICT_DEFAULT['Le'],
-            'k_Tết': K_DICT_DEFAULT['Tet']
+            'k_Tết': K_DICT_DEFAULT['Tet'],
+            'k_Cắt điện': K_DICT_DEFAULT['CatDien'] # User tự nhập hệ số cắt điện
         })
     df_edit = pd.DataFrame(edit_data)
     
-    st.write(f"✍️ **BẢNG 2: Tinh chỉnh Hệ số Ngày cho {selected_edit_month}**")
-    st.caption("Nhấp đúp vào các ô hệ số bên dưới để thay đổi. Kết quả ở Bảng 3 sẽ tự động cập nhật.")
+    st.write(f"✍️ **BẢNG 2: Khai báo Cắt điện & Tinh chỉnh Hệ số Ngày cho {selected_edit_month}**")
+    st.caption("Nhập số Ngày Cắt Điện và các Hệ số k. Cứ 1 ngày cắt điện thêm vào sẽ tự động trừ đi 1 ngày thường.")
     
     edited_df = st.data_editor(
         df_edit,
         disabled=['Tháng'],
         hide_index=True,
         use_container_width=True,
-        key=f"editor_k_{model_for_base}_{selected_edit_month}" # Đổi key để chống xung đột cache
+        key=f"editor_k_{model_for_base}_{selected_edit_month}" 
     )
     
-    # --- BẢNG 3: BẢNG KẾT QUẢ TÍNH TOÁN LẠI TỪ BẢNG 2 ---
+    # --- BẢNG 3: KẾT QUẢ CHO THÁNG ĐƯỢC CHỌN ---
     final_results = []
     for i, e_row in edited_df.iterrows():
         orig_idx = orig_indices[i]
         r_orig = res.loc[orig_idx]
         
-        n_thuong = r_orig['Ngày Thường']
+        # Lấy lại số ngày gốc
+        num_days = int(r_orig['Số ngày'])
         n_t2 = r_orig['T2']
         n_t7 = r_orig['T7']
         n_cn = r_orig['CN']
         n_le = r_orig['Lễ']
         n_tet = r_orig['Tết']
         
-        # 1. Lấy số Tổng (Q) của mô hình user đang chọn
+        # Số ngày cắt điện AI dùng (từ file)
+        n_catdien_old = r_orig['Cắt điện']
+        n_thuong_old = num_days - n_t2 - n_t7 - n_cn - n_le - n_tet - n_catdien_old
+        if n_thuong_old < 0: n_thuong_old = 0
+        
+        # Lấy số Tổng (Q) từ mô hình
         q_model = r_orig[model_for_base]
         
-        # 2. Số ngày chuẩn cũ AI đã dùng (dựa vào cấu hình k ban đầu)
-        eq_days_standard = n_thuong + n_t2*K_DICT_DEFAULT['T2'] + n_t7*K_DICT_DEFAULT['T7'] + n_cn*K_DICT_DEFAULT['CN'] + n_le*K_DICT_DEFAULT['Le'] + n_tet*K_DICT_DEFAULT['Tet']
-        
-        # 3. Sản lượng 1 Ngày Cơ sở (x)
+        # Tính Base X từ cấu hình Mặc định (Cách AI đã hiểu)
+        eq_days_standard = n_thuong_old + n_t2*K_DICT_DEFAULT['T2'] + n_t7*K_DICT_DEFAULT['T7'] + n_cn*K_DICT_DEFAULT['CN'] + n_le*K_DICT_DEFAULT['Le'] + n_tet*K_DICT_DEFAULT['Tet'] + n_catdien_old*K_DICT_DEFAULT['CatDien']
         base_x = q_model / eq_days_standard if eq_days_standard else 0
         
-        # 4. Số ngày chuẩn MỚI (Dựa vào k do user vừa sửa trên Bảng 2)
-        eq_days_new = n_thuong + n_t2*e_row['k_T2'] + n_t7*e_row['k_T7'] + n_cn*e_row['k_CN'] + n_le*e_row['k_Lễ'] + n_tet*e_row['k_Tết']
+        # Số ngày MỚI (User nhập trên lưới)
+        n_catdien_new = int(e_row['Ngày Cắt Điện'])
+        n_thuong_new = num_days - n_t2 - n_t7 - n_cn - n_le - n_tet - n_catdien_new
+        if n_thuong_new < 0: n_thuong_new = 0 # Đảm bảo không âm
         
-        # 5. Tính Chốt Cuối
+        # Số ngày chuẩn tương đương MỚI
+        eq_days_new = n_thuong_new + n_t2*e_row['k_T2'] + n_t7*e_row['k_T7'] + n_cn*e_row['k_CN'] + n_le*e_row['k_Lễ'] + n_tet*e_row['k_Tết'] + n_catdien_new*e_row['k_Cắt điện']
+        
+        # Tính Chốt Cuối
         final_total = base_x * eq_days_new
         
         final_results.append({
@@ -536,6 +568,7 @@ if 'res_output' in st.session_state:
             'Chủ Nhật': base_x * e_row['k_CN'],
             'Ngày Lễ': base_x * e_row['k_Lễ'],
             'Tết Âm': base_x * e_row['k_Tết'],
+            'Cắt Điện': base_x * e_row['k_Cắt điện'],
             'Tổng Ban Đầu (AI)': q_model,
             'TỔNG SAU ĐIỀU CHỈNH': final_total
         })
@@ -544,44 +577,34 @@ if 'res_output' in st.session_state:
     
     st.write(f"📊 **BẢNG 3: Sản lượng Từng Loại Ngày & Kết Quả Chốt Cuối Cùng của {selected_edit_month} (kWh)**")
     st.dataframe(df_final.style.format({
-        'Ngày Thường (T3-T6)': '{:,.0f}',
-        'Thứ 2': '{:,.0f}',
-        'Thứ 7': '{:,.0f}',
-        'Chủ Nhật': '{:,.0f}',
-        'Ngày Lễ': '{:,.0f}',
-        'Tết Âm': '{:,.0f}',
-        'Tổng Ban Đầu (AI)': '{:,.0f}',
-        'TỔNG SAU ĐIỀU CHỈNH': '{:,.0f}'
+        'Ngày Thường (T3-T6)': '{:,.0f}', 'Thứ 2': '{:,.0f}', 'Thứ 7': '{:,.0f}', 'Chủ Nhật': '{:,.0f}',
+        'Ngày Lễ': '{:,.0f}', 'Tết Âm': '{:,.0f}', 'Cắt Điện': '{:,.0f}',
+        'Tổng Ban Đầu (AI)': '{:,.0f}', 'TỔNG SAU ĐIỀU CHỈNH': '{:,.0f}'
     }).apply(lambda x: ['background-color: #d4edda; font-weight: bold' if i == 'TỔNG SAU ĐIỀU CHỈNH' else ('background-color: #f8f9fa' if i == 'Tổng Ban Đầu (AI)' else '') for i in x.index], axis=1), hide_index=True, use_container_width=True)
 
-    # --- BIỂU ĐỒ SO SÁNH (Chỉ hiển thị cho 1 tháng được chọn) ---
+    # --- BIỂU ĐỒ CƠ CẤU MỚI (CLUSTERED BAR CHART) ---
     if not df_final.empty:
         st.markdown("---")
-        st.subheader(f"📈 Biểu Đồ Phụ Tải Ngày Của {selected_edit_month}")
+        st.subheader(f"📈 Phân bổ Cơ cấu Phụ tải Các Ngày trong Tuần - {selected_edit_month}")
         
-        fig, ax = plt.subplots(figsize=(10, 5))
+        # Chuẩn bị DataFrame cho Pandas Plot
+        df_bar = df_final[['Tháng', 'Ngày Thường (T3-T6)', 'Thứ 2', 'Thứ 7', 'Chủ Nhật', 'Ngày Lễ', 'Tết Âm', 'Cắt Điện']].copy()
+        df_bar.set_index('Tháng', inplace=True)
         
-        months = df_final['Tháng']
-        base_loads = df_final['Ngày Thường (T3-T6)']
-        t7_loads = df_final['Thứ 7']
-        cn_loads = df_final['Chủ Nhật']
+        # Vẽ biểu đồ Clustered Bar bằng Pandas cho màu sắc đa dạng và tự động chia khoảng cách đẹp
+        fig2, ax2 = plt.subplots(figsize=(12, 6))
         
-        x = np.arange(len(months))
-        width = 0.25
+        colors = ['#4c72b0', '#55a868', '#dd8452', '#c44e52', '#8172b2', '#937860', '#333333']
+        df_bar.plot(kind='bar', ax=ax2, color=colors, edgecolor='white', linewidth=1)
         
-        ax.bar(x - width, base_loads, width, label='Ngày Thường (T3-T6)', color='#4c72b0')
-        ax.bar(x, t7_loads, width, label='Thứ 7', color='#dd8452')
-        ax.bar(x + width, cn_loads, width, label='Chủ Nhật', color='#c44e52')
+        ax2.set_ylabel('Sản lượng 1 Ngày (kWh)')
+        ax2.set_xlabel('')
+        ax2.set_title(f'Sản lượng từng loại ngày của {selected_edit_month}')
         
-        ax.set_ylabel('Sản lượng (kWh)')
-        ax.set_title('So sánh Cơ cấu Phụ tải Các Ngày trong Tuần')
-        
-        ax.set_xticks(x)
-        ax.set_xticklabels(months)
-        
-        ax.legend()
+        plt.xticks(rotation=0)
+        ax2.legend(title='Loại ngày', bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout() 
-        st.pyplot(fig)
+        st.pyplot(fig2)
 
 # ==============================================================================
 # 4. MÁY SOI SEED
@@ -605,7 +628,7 @@ if f_train and f_input:
                 target_val = st.number_input(f"Giá trị mong muốn", value=740000000.0, step=1000000.0, format="%.0f")
 
             c1, c2, c3 = st.columns(3)
-            with c1: model_choice = st.selectbox("Mô hình ưu tiên:", ["Neural Network", "Random Forest", "XGBoost", "Trung Bình Cộng"])
+            with c1: model_choice = st.selectbox("Mô hình ưu tiên:", ["Neural Network", "Random Forest", "XGBoost"])
             with c2: acc = st.slider("Sai số (+/- %)", 0.1, 10.0, 1.0)
             with c3: batch_size = st.number_input("Số lượng seed/lô", value=20, step=10)
 
@@ -623,8 +646,7 @@ if f_train and f_input:
                     try:
                         p_nn, p_rf, p_xg, _ = chay_mo_hinh_goc(df_train_scan, df_input_scan, USER_HOLIDAYS_MAP, K_DICT_DEFAULT, seed=seed)
                         v_nn, v_rf, v_xg = p_nn[target_index], p_rf[target_index], p_xg[target_index]
-                        v_avg = (v_nn + v_rf + v_xg) / 3
-                        val = {"Neural Network": v_nn, "Random Forest": v_rf, "XGBoost": v_xg, "Trung Bình Cộng": v_avg}[model_choice]
+                        val = {"Neural Network": v_nn, "Random Forest": v_rf, "XGBoost": v_xg}[model_choice]
                         is_pass = limit_min <= val <= limit_max
                         batch_data.append({"Seed": seed, "Tháng": selected_month_str, "Kết quả (NN)": v_nn, "Kết quả (RF)": v_rf, "Kết quả (XGB)": v_xg, "Độ lệch": val - target_val, "Trạng thái": "✅ ĐẠT" if is_pass else "❌"})
                     except: batch_data.append({"Seed": seed, "Trạng thái": "⚠️ Lỗi"})
@@ -651,31 +673,23 @@ if f_train and f_input:
 # ==============================================================================
 st.markdown("---")
 if 'res_output' in st.session_state:
-    st.header("🛡️ GIẢI TRÌNH LOGIC DỰ BÁO (Dựa trên mô hình bạn chọn)")
+    st.header("🛡️ GIẢI TRÌNH LOGIC DỰ BÁO")
     
     r = st.session_state.res_output
     df_p = r[['Tháng', 'Năm']].copy()
     
-    # Xu hướng
     df_p['Xu hướng nền (A)'] = st.session_state.trend_val
-    
-    # Lấy Kết quả dự báo gốc từ mô hình đang được chọn 
     try: model_val = r[model_for_base]
-    except: model_val = r['Tổng AI (Q)']
+    except: model_val = r['XGBoost']
         
-    # Biến động do ML
     df_p['Biến động ML (B)'] = model_val - df_p['Xu hướng nền (A)']
-    
     if 'Thực Tế' in r.columns:
         df_p['Thực Tế (E)'] = r['Thực Tế']
-        
     df_p['DỰ BÁO CỦA MÔ HÌNH'] = model_val
     
     format_dict = {
-        'Xu hướng nền (A)': '{:,.0f}', 
-        'Biến động ML (B)': '{:+,.0f}', 
-        'DỰ BÁO CỦA MÔ HÌNH': '{:,.0f}',
-        'Thực Tế (E)': '{:,.0f}'
+        'Xu hướng nền (A)': '{:,.0f}', 'Biến động ML (B)': '{:+,.0f}', 
+        'DỰ BÁO CỦA MÔ HÌNH': '{:,.0f}', 'Thực Tế (E)': '{:,.0f}'
     }
     
     cols_to_show = [c for c in ['Tháng', 'Năm', 'Thực Tế (E)', 'Xu hướng nền (A)', 'Biến động ML (B)', 'DỰ BÁO CỦA MÔ HÌNH'] if c in df_p.columns]
@@ -683,5 +697,4 @@ if 'res_output' in st.session_state:
     st.dataframe(df_p[cols_to_show].style.format(format_dict).apply(
         lambda x: ['background-color: #f0f2f6' if i == 'DỰ BÁO CỦA MÔ HÌNH' else '' for i in x.index], axis=1
     ), use_container_width=True)
-    
-    st.caption("🔍 **A**: Tăng trưởng tự nhiên dựa trên hồi quy 3 năm | **B**: Sai lệch do thời tiết/lễ tết do máy học tự tìm | **Dự báo của Mô hình (Q) = A + B**")
+    st.caption("🔍 **A**: Tăng trưởng tự nhiên dựa trên hồi quy 3 năm | **B**: Sai lệch do thời tiết/lễ tết do máy học tự tìm | **Dự báo của Mô hình = A + B**")
