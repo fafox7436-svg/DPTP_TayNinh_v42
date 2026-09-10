@@ -304,7 +304,12 @@ with st.sidebar:
     df_default = pd.DataFrame(DEFAULT_HOLIDAYS)
     edited_df = st.data_editor(df_default, num_rows="dynamic", use_container_width=True)
     USER_HOLIDAYS_MAP = {}
+    
+    # Dọn dẹp dữ liệu: bỏ dòng thiếu Năm/Tháng, điền 0 cho các ô Lễ bị bỏ trống
+    edited_df = edited_df.dropna(subset=['Năm', 'Tháng']).fillna(0)
+    
     for _, row in edited_df.iterrows():
+        # int() an toàn vì không còn NaN
         USER_HOLIDAYS_MAP[(int(row['Năm']), int(row['Tháng']))] = (int(row['Tết Âm']), int(row['Lễ Nhỏ']))
     
     # --- CẤU HÌNH HỆ SỐ NGÀY (K) MẶC ĐỊNH ---
@@ -549,13 +554,20 @@ if 'res_output' in st.session_state:
         eq_days_standard = n_thuong_old + n_t2*K_DICT_DEFAULT['T2'] + n_t7*K_DICT_DEFAULT['T7'] + n_cn*K_DICT_DEFAULT['CN'] + n_le*K_DICT_DEFAULT['Le'] + n_tet*K_DICT_DEFAULT['Tet'] + n_catdien_old*K_DICT_DEFAULT['CatDien']
         base_x = q_model / eq_days_standard if eq_days_standard else 0
         
-        # Số ngày MỚI (User nhập trên lưới)
-        n_catdien_new = int(e_row['Ngày Cắt Điện'])
+        # Bắt lỗi NaN cho số ngày cắt điện và các hệ số k
+        n_catdien_new = int(e_row['Ngày Cắt Điện']) if pd.notna(e_row['Ngày Cắt Điện']) else 0
+        k_t2_new = float(e_row['k_T2']) if pd.notna(e_row['k_T2']) else K_DICT_DEFAULT['T2']
+        k_t7_new = float(e_row['k_T7']) if pd.notna(e_row['k_T7']) else K_DICT_DEFAULT['T7']
+        k_cn_new = float(e_row['k_CN']) if pd.notna(e_row['k_CN']) else K_DICT_DEFAULT['CN']
+        k_le_new = float(e_row['k_Lễ']) if pd.notna(e_row['k_Lễ']) else K_DICT_DEFAULT['Le']
+        k_tet_new = float(e_row['k_Tết']) if pd.notna(e_row['k_Tết']) else K_DICT_DEFAULT['Tet']
+        k_catdien_new = float(e_row['k_Cắt điện']) if pd.notna(e_row['k_Cắt điện']) else K_DICT_DEFAULT['CatDien']
+
         n_thuong_new = num_days - n_t2 - n_t7 - n_cn - n_le - n_tet - n_catdien_new
         if n_thuong_new < 0: n_thuong_new = 0 # Đảm bảo không âm
         
         # Số ngày chuẩn tương đương MỚI
-        eq_days_new = n_thuong_new + n_t2*e_row['k_T2'] + n_t7*e_row['k_T7'] + n_cn*e_row['k_CN'] + n_le*e_row['k_Lễ'] + n_tet*e_row['k_Tết'] + n_catdien_new*e_row['k_Cắt điện']
+        eq_days_new = n_thuong_new + n_t2*k_t2_new + n_t7*k_t7_new + n_cn*k_cn_new + n_le*k_le_new + n_tet*k_tet_new + n_catdien_new*k_catdien_new
         
         # Tính Chốt Cuối
         final_total = base_x * eq_days_new
@@ -563,12 +575,12 @@ if 'res_output' in st.session_state:
         final_results.append({
             'Tháng': e_row['Tháng'],
             'Ngày Thường (T3-T6)': base_x,
-            'Thứ 2': base_x * e_row['k_T2'],
-            'Thứ 7': base_x * e_row['k_T7'],
-            'Chủ Nhật': base_x * e_row['k_CN'],
-            'Ngày Lễ': base_x * e_row['k_Lễ'],
-            'Tết Âm': base_x * e_row['k_Tết'],
-            'Cắt Điện': base_x * e_row['k_Cắt điện'],
+            'Thứ 2': base_x * k_t2_new,
+            'Thứ 7': base_x * k_t7_new,
+            'Chủ Nhật': base_x * k_cn_new,
+            'Ngày Lễ': base_x * k_le_new,
+            'Tết Âm': base_x * k_tet_new,
+            'Cắt Điện': base_x * k_catdien_new,
             'Tổng Ban Đầu (AI)': q_model,
             'TỔNG SAU ĐIỀU CHỈNH': final_total
         })
