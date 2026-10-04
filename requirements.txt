@@ -9,3 +9,4 @@ xlrd==2.0.1
 pydantic==2.13.5
 tzdata==2026.4
 matplotlib
+beautifulsoup4
