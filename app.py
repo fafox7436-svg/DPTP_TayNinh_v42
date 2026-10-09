@@ -8,7 +8,7 @@ from dataclasses import asdict
 from datetime import datetime
 from importlib.metadata import version
 from zoneinfo import ZoneInfo
-
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.express as px
