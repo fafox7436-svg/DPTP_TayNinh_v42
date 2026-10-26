@@ -8,6 +8,7 @@ import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from data_io import DAYS, ENERGY, HUMIDITY, MONTH, OUTAGE, TEMP, YEAR, InputError
+from lich_nghi_goc import DEFAULT_HOLIDAYS
 
 
 def excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
@@ -40,16 +41,16 @@ def input_template() -> bytes:
     return excel_bytes({
         "Lich_su": pd.DataFrame(columns=[YEAR, MONTH, ENERGY, TEMP, HUMIDITY, DAYS, OUTAGE]),
         "Du_bao": pd.DataFrame(columns=[YEAR, MONTH, TEMP, HUMIDITY, DAYS, OUTAGE]),
-        "Lich_nghi": pd.DataFrame(columns=["Ngày", "Loại"]),
+        "Lich_nghi": pd.DataFrame(DEFAULT_HOLIDAYS),
         "Huong_dan": pd.DataFrame({"Nội dung": [
             "Điền các sheet, sau đó có thể tải cùng tệp vào cả hai ô Lịch sử và Dự báo; chọn đúng sheet.",
-            "Một dòng/tháng; lịch sử tối thiểu 24 tháng liên tục. Năm, Tháng là số nguyên.",
+            "Ưu tiên một dòng/tháng. Giữ nguyên thứ tự đầu vào để tái lập mô hình gốc; không tự sắp xếp.",
             "Tổng thương phẩm: toàn bộ hai tệp dùng cùng đơn vị kWh hoặc triệu kWh đã chọn trong ứng dụng.",
-            "Nếu không dùng nhiệt độ/độ ẩm, xóa hẳn cột đó ở cả hai sheet; không để cột rỗng.",
+            "Mô hình gốc chỉ dùng cột đặc trưng có ở cả hai bảng. Kiểm tra đầy đủ nhiệt độ/độ ẩm đã dùng trước đây.",
             "Số ngày: có thể xóa cột để tính từ lịch. Số ngày cắt điện: có thể xóa cột để mặc định 0.",
-            "Nếu có cột Số ngày cắt điện, điền số ngày tương đương mất điện trên toàn phạm vi, không dùng số vụ.",
-            "Lịch_nghi: ngày cụ thể dạng ô Date hoặc YYYY-MM-DD; loại Lễ hoặc Tết, gồm cả ngày nghỉ bù áp dụng.",
-            "Không có lịch nghỉ mặc định chính thức. Kiểm tra lịch và xác nhận giả định trước khi dự báo.",
+            "Số ngày cắt điện giữ quy tắc int() của mã gốc: phần thập phân bị bỏ khi tính toán.",
+            "Lich_nghi: Năm, Tháng, Tết Âm, Lễ Nhỏ. Bảng mặc định được chép nguyên từ mã gốc 2023–2027.",
+            "Dùng đúng lịch và hệ số của lần chạy cần đối chiếu. Bảng mặc định không thay thế lịch đã được đơn vị xác nhận.",
         ]}),
     })
 
@@ -73,6 +74,7 @@ def restore_scenarios(data: bytes, signature: str, expected: pd.DataFrame,
         frame = pd.DataFrame(obj["scenarios"])
         if set(frame.columns) != set(expected.columns) or frame["Tháng"].tolist() != expected["Tháng"].tolist():
             raise InputError("Cấu trúc hoặc danh sách tháng của phương án không hợp lệ.")
+        frame.index = expected.index.copy()
         return obj["model"], frame[expected.columns]
     except InputError:
         raise

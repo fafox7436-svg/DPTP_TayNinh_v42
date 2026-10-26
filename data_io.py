@@ -128,33 +128,36 @@ def validate_monthly(raw: pd.DataFrame, *, history: bool, decimal: str = ".") ->
     df["Date"] = pd.to_datetime(dict(year=df[YEAR], month=df[MONTH], day=1))
     if df["Date"].duplicated().any():
         labels = df.loc[df["Date"].duplicated(False), "Date"].dt.strftime("%m/%Y").unique()
-        result.errors.append("Trùng tháng: " + ", ".join(labels) + ". Cần tổng hợp thành một dòng/tháng.")
+        result.warnings.append("Trùng tháng: " + ", ".join(labels) + ". Các dòng vẫn được giữ để tái lập mã gốc; chưa kiểm chứng cuốn chiếu khi tháng trùng.")
     actual_days = df["Date"].dt.days_in_month
     if DAYS in df and not (df[DAYS] == actual_days).all():
-        result.errors.append("Cột Số ngày khác lịch thực tế. Sửa dữ liệu để thống nhất số ngày tính toán.")
-    df[DAYS] = actual_days
+        result.warnings.append("Cột Số ngày khác lịch thực tế. Giữ nguyên số đã nhập: mô hình gốc tính theo ngày lịch, bảng chốt dùng cột Số ngày.")
+    if DAYS not in df:
+        df[DAYS] = actual_days
     if OUTAGE not in df:
         df[OUTAGE] = 0.0
     if ((df[OUTAGE] < 0) | (df[OUTAGE] > df[DAYS])).any():
         result.errors.append("Số ngày cắt điện tương đương phải từ 0 đến số ngày của tháng.")
-    if history and (df[ENERGY] <= 0).any():
-        result.errors.append("Điện thương phẩm lịch sử phải lớn hơn 0; kiểm tra các tháng chưa đủ số liệu.")
+    if history and (df[ENERGY] < 0).any():
+        result.errors.append("Điện thương phẩm lịch sử không được âm.")
     if TEMP in df and not df[TEMP].between(-50, 60).all():
         result.errors.append("Nhiệt độ TB phải dùng °C, trong khoảng kiểm tra −50 đến 60.")
     if HUMIDITY in df and not df[HUMIDITY].between(0, 100).all():
         result.errors.append("Độ ẩm phải dùng %, trong khoảng 0–100.")
     if HUMIDITY in df and df[HUMIDITY].le(1).all():
         result.warnings.append("Độ ẩm toàn bộ ≤ 1: kiểm tra xem dữ liệu đang dùng tỷ lệ 0–1 thay cho %.")
-    df = df.sort_values("Date").reset_index(drop=True)
+    # Thứ tự dòng ảnh hưởng bootstrap của RF; không tự sắp xếp đầu vào mô hình gốc.
     if history:
-        if len(df) < 24:
-            result.errors.append("Cần tối thiểu 24 tháng lịch sử; nên có từ 36 tháng để kiểm chứng.")
+        if len(df) < 2:
+            result.errors.append("Cần ít nhất 2 dòng lịch sử để chạy mô hình.")
+        elif len(df) < 24:
+            result.warnings.append("Lịch sử dưới 24 tháng: vẫn chạy mô hình gốc, chưa đủ dữ liệu kiểm chứng cuốn chiếu.")
         elif len(df) < 36:
             result.warnings.append("Lịch sử dưới 36 tháng; số kỳ kiểm chứng và độ ổn định mô hình còn hạn chế.")
         expected = pd.date_range(df["Date"].min(), df["Date"].max(), freq="MS")
         gaps = expected.difference(df["Date"])
         if len(gaps):
-            result.errors.append("Thiếu tháng lịch sử: " + ", ".join(d.strftime("%m/%Y") for d in gaps[:12]))
+            result.warnings.append("Thiếu tháng lịch sử: " + ", ".join(d.strftime("%m/%Y") for d in gaps[:12]) + ". Giữ nguyên dữ liệu, không tự nội suy.")
     elif ENERGY in df:
         result.warnings.append("Cột điện thương phẩm trong tệp dự báo không được dùng làm đầu vào mô hình.")
     result.frame = df
@@ -162,17 +165,9 @@ def validate_monthly(raw: pd.DataFrame, *, history: bool, decimal: str = ".") ->
 
 
 def validate_pair(history: pd.DataFrame, future: pd.DataFrame) -> list[str]:
-    errors = []
-    if (future["Date"] <= history["Date"].max()).any():
-        errors.append("Tháng dự báo phải sau tháng lịch sử cuối cùng. Dùng chức năng kiểm chứng để đánh giá lịch sử.")
-    last = history["Date"].max()
-    horizon = (future[YEAR] - last.year) * 12 + future[MONTH] - last.month
-    if (horizon > 12).any():
-        errors.append("Bản này hỗ trợ dự báo trong 12 tháng sau mốc lịch sử cuối cùng.")
-    for col in [TEMP, HUMIDITY]:
-        if (col in history) != (col in future):
-            errors.append(f"Cột {col} phải có trong cả hai tệp hoặc bỏ ở cả hai; không tự điền 0.")
-    return errors
+    # Mã gốc cho phép tính lại tháng lịch sử và chỉ lấy đặc trưng có ở cả hai bảng.
+    # Giao diện hiển thị lưu ý, không đổi hoặc loại dữ liệu để ép khớp v2.
+    return []
 
 
 def demonstration_data() -> tuple[pd.DataFrame, pd.DataFrame]:

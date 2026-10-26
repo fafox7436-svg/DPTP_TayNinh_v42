@@ -8,7 +8,7 @@ from dataclasses import asdict
 from datetime import datetime
 from importlib.metadata import version
 from zoneinfo import ZoneInfo
-import matplotlib.pyplot as plt
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -21,7 +21,8 @@ from data_io import (DAYS, ENERGY, HUMIDITY, MONTH, OUTAGE, TEMP, YEAR, InputErr
 from forecasting import (DAY_TYPES, NAIVE, NN, RF, TREND, VERSION, XGB, Factors,
                          available_models, default_scenarios, finalize_scenarios,
                          fingerprint, predict_models, recommend, rolling_backtest,
-                         validate_holidays)
+                         validate_holidays, holidays_frame, HOLIDAY_COLUMNS)
+from lich_nghi_goc import DEFAULT_HOLIDAYS
 from reporting import excel_bytes, input_template, restore_scenarios, scenario_json
 
 
@@ -180,7 +181,7 @@ def render_ai(area: str, history: pd.DataFrame | None, future: pd.DataFrame | No
             return
         if st.button("Dùng mức tham khảo cho phương án tháng này"):
             try:
-                model_choice = st.session_state.get(f"base_model_{run['signature']}", run["recommended"])
+                model_choice = st.session_state.get(f"base_model_{run['signature']}", XGB)
                 temporary = current.copy()
                 row_index = temporary.index[temporary["Tháng"] == month_label][0]
                 temporary.loc[row_index, "Điều chỉnh thêm (%)"] = 0.0
@@ -219,7 +220,7 @@ def render_scenarios(run: dict, fresh: bool, unit: str, operator: str):
     if not choices:
         st.error("Không có mô hình hợp lệ để lập phương án.")
         return
-    preferred = run["recommended"] if run["recommended"] in choices else choices[0]
+    preferred = XGB if XGB in choices else choices[0]
     model = st.selectbox("Mô hình làm cơ sở", choices, index=choices.index(preferred), key=f"base_model_{signature}")
     st.caption("Hệ số áp dụng chung khi đổi mô hình. Sản lượng được tính lại từ mô hình vừa chọn. "
                "Mỗi thay đổi cần lý do; các tháng được lưu cùng một bảng trong phiên.")
@@ -243,9 +244,9 @@ def render_scenarios(run: dict, fresh: bool, unit: str, operator: str):
         "holiday": "k lễ", "tet": "k Tết", "outage": "k cắt điện",
     }
     config = {key: st.column_config.NumberColumn(label, min_value=0.0,
-              max_value=1.0 if key == "outage" else 3.0, step=0.01, required=True)
+              step=0.01, required=True)
               for key, label in factors_columns.items()}
-    config.update({OUTAGE: st.column_config.NumberColumn("Ngày cắt điện tương đương", min_value=0.0, max_value=31.0, step=0.1, required=True),
+    config.update({OUTAGE: st.column_config.NumberColumn("Ngày cắt điện tương đương", min_value=0.0, max_value=31.0, step=1.0, required=True),
                    "Điều chỉnh thêm (%)": st.column_config.NumberColumn(min_value=-100.0, max_value=100.0, step=0.1, required=True),
                    "Lý do": st.column_config.TextColumn(width="large")})
     edited = st.data_editor(st.session_state["scenario_base"], column_config=config,
@@ -272,7 +273,7 @@ def render_scenarios(run: dict, fresh: bool, unit: str, operator: str):
     with st.expander("Phân bổ ngày và đối chiếu tổng"):
         st.dataframe(allocation, hide_index=True, width="stretch")
         st.caption("Sản lượng/ngày là mức bình quân giả định. Tổng nhóm ngày = số ngày × sản lượng/ngày. "
-                   "Ảnh hưởng cắt điện được phân bổ đều theo tỷ trọng ngày; đây chưa phải dự báo từng ngày vận hành.")
+                   "Ngày cắt điện là một nhóm riêng theo công thức gốc; không phân bổ đều như v2.")
     if st.button("Ghi nhận phiên bản phương án"):
         st.session_state.setdefault("audit", []).append({
             "Thời điểm": now_label(), "Người lập": operator, "Mô hình": model,
@@ -293,7 +294,7 @@ def render_scenarios(run: dict, fresh: bool, unit: str, operator: str):
     sheets = {"Phuong_an": final, "Phan_bo_ngay": allocation, "Du_bao_mo_hinh": run["predictions"],
               "Sai_so": run["scores"], "Kiem_chung": run["backtest"], "He_so_phuong_an": edited,
               "Cau_hinh": pd.DataFrame({"Thuộc tính": metadata.keys(), "Giá trị": [str(v) for v in metadata.values()]}),
-              "Lich_nghi": pd.DataFrame(list(run["holidays"].items()), columns=["Ngày", "Loại"]),
+              "Lich_nghi": holidays_frame(run["holidays"]),
               "Lich_su": run["history"], "Dau_vao": run["future"],
               "Nhat_ky": pd.DataFrame(st.session_state.get("audit", []))}
     a, b = st.columns(2)
@@ -308,6 +309,74 @@ def render_scenarios(run: dict, fresh: bool, unit: str, operator: str):
                             width="stretch")
     st.caption("Excel lưu kết quả và hồ sơ tính toán. JSON lưu hệ số để mở lại sau khi nạp đúng dữ liệu và cấu hình. "
                "Ứng dụng không tự lưu dữ liệu vào cơ sở dữ liệu; đóng phiên có thể mất chỉnh sửa chưa tải xuống.")
+
+
+def render_seed_scan(history, future, holidays, factors, ready, unit, signature):
+    st.subheader("Find Seed — so sánh các lần khởi tạo")
+    st.caption("Mỗi seed chạy đúng ba mô hình gốc. Đạt khoảng mục tiêu chỉ thể hiện mức gần giá trị bạn nhập, "
+               "không chứng minh dự báo chính xác hơn. Seed ở bước 2 chỉ đổi khi bạn tự nhập lại.")
+    if not ready:
+        st.info("Nạp dữ liệu hợp lệ ở bước 1 để quét seed.")
+        return
+    left, right = st.columns(2)
+    with left:
+        position = st.selectbox("Tháng muốn soi", list(range(len(future))), index=len(future) - 1,
+            format_func=lambda i: f"Dòng {i + 1} · {future.iloc[i]['Date']:%m/%Y}", key="scan_month")
+        model = st.selectbox("Mô hình ưu tiên khi lọc", [NN, RF, XGB], key="scan_model")
+    with right:
+        target = st.number_input(f"Giá trị mục tiêu ({unit})", min_value=0.0,
+            value=740_000_000.0 if unit == "kWh" else 740.0,
+            step=1_000_000.0 if unit == "kWh" else 1.0, key=f"scan_target_{unit}")
+        tolerance = st.slider("Khoảng chấp nhận ± (%)", 0.1, 10.0, 1.0, key="scan_tolerance")
+    batch = int(st.number_input("Số lượng seed/lô", min_value=1, max_value=200,
+                                value=20, step=1, key="scan_count"))
+    scope = fingerprint(signature, position, model, target, tolerance)
+    if st.session_state.get("scan_scope") != scope:
+        st.session_state["scan_scope"] = scope
+        st.session_state["scan_current_seed"] = 0
+        st.session_state["scan_history"] = pd.DataFrame()
+    start = st.session_state["scan_current_seed"]
+    end = start + batch - 1
+    st.info(f"Lô tiếp theo: seed {start}–{end}. Đổi dữ liệu hoặc mục tiêu sẽ bắt đầu một bảng quét mới.")
+    run_col, clear_col = st.columns(2)
+    with run_col:
+        run_scan = st.button("Chạy lô seed", key="run_seed_scan", disabled=end > 2147483647)
+    with clear_col:
+        clear = st.button("Xóa lịch sử quét", key="clear_seed_scan")
+    if clear:
+        st.session_state["scan_current_seed"] = 0
+        st.session_state["scan_history"] = pd.DataFrame()
+        st.rerun()
+    if run_scan:
+        rows = []
+        bar = st.progress(0.0, text="Đang chạy ba mô hình với từng seed…")
+        for offset, seed in enumerate(range(start, end + 1)):
+            row = {"Seed": seed, "Tháng": future.iloc[position]["Date"].strftime("%m/%Y"),
+                   "Mô hình lọc": model, "Mục tiêu": target, "Khoảng ± (%)": tolerance}
+            try:
+                predicted, messages = predict_models(history, future, holidays, factors, seed, [NN, RF, XGB])
+                row.update({name: float(predicted.iloc[position][name]) for name in [NN, RF, XGB]})
+                value = row[model]
+                row["Độ lệch"] = value - target
+                row["Trạng thái"] = ("Đạt khoảng mục tiêu" if target * (1 - tolerance / 100) <= value
+                                     <= target * (1 + tolerance / 100) else "Ngoài khoảng")
+                row["Ghi chú"] = "; ".join(messages)
+            except Exception as exc:
+                row["Trạng thái"], row["Ghi chú"] = "Lỗi", type(exc).__name__
+            rows.append(row)
+            bar.progress((offset + 1) / batch)
+        previous = st.session_state["scan_history"]
+        current = pd.DataFrame(rows)
+        st.session_state["scan_history"] = (current if previous.empty else
+                                             pd.concat([previous, current], ignore_index=True))
+        st.session_state["scan_current_seed"] = end + 1
+        st.rerun()
+    result = st.session_state["scan_history"]
+    if not result.empty:
+        st.dataframe(result, hide_index=True, width="stretch")
+        st.download_button("Tải bảng quét seed", excel_bytes({"Find_seed": result}),
+            file_name="ket_qua_find_seed.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 def main():
@@ -326,14 +395,14 @@ def main():
             labels = {"monday": "Thứ Hai", "saturday": "Thứ Bảy", "sunday": "Chủ nhật",
                       "holiday": "Ngày lễ", "tet": "Tết", "outage": "Cắt điện – tỷ lệ còn lại"}
             values = {key: st.number_input(labels[key], min_value=0.0,
-                      max_value=1.0 if key == "outage" else 3.0, value=value, step=0.01,
+                      value=value, step=0.01,
                       key=f"factor_{key}") for key, value in defaults.items()}
             factors = Factors(**values)
             st.caption("Ngày thường (thứ Ba–thứ Sáu, không phải lễ/Tết) có hệ số 1.")
         with st.expander("Thiết lập kiểm chứng"):
             horizon = int(st.number_input("Chân trời dự báo kiểm chứng (tháng)", 1, 12, 1, key="bt_horizon"))
             periods = int(st.number_input("Số kỳ kiểm chứng gần nhất", 3, 24, 6, key="bt_periods"))
-            seed = int(st.number_input("Seed cố định để tái lập", 0, 2147483647, 42))
+            seed = int(st.number_input("Seed cố định để tái lập", 0, 2147483647, 42, key="main_seed"))
             st.caption("So sánh theo thời gian: mô hình chỉ học từ các tháng trước mốc dự báo.")
         st.download_button("Tải tệp Excel mẫu", template_bytes(), file_name="mau_du_lieu_du_bao.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -342,19 +411,19 @@ def main():
 
     st.title("Dự báo điện thương phẩm theo tháng")
     st.write(f"{area} · Nhập dữ liệu → kiểm chứng mô hình → lập phương án → xuất hồ sơ")
-    st.caption("Đại lượng dự báo là điện năng; không phải công suất phụ tải đỉnh (MW).")
+    st.caption("Lõi dự báo gốc: NN 10–15–10, RF 200 cây, XGBoost 100 cây · Điện thương phẩm theo tháng.")
     if demo:
         st.warning("Đang dùng dữ liệu tổng hợp giả lập để thử thao tác. Không phải số liệu của EVN hoặc của tỉnh.")
     notice = st.session_state.pop("notice", None)
     if notice:
         st.success(notice)
-    data_tab, forecast_tab, scenario_tab, ai_tab = st.tabs([
-        "1. Dữ liệu và lịch nghỉ", "2. Kiểm chứng và dự báo", "3. Chốt phương án", "4. Trợ lý AI"])
+    data_tab, forecast_tab, scenario_tab, ai_tab, seed_tab = st.tabs([
+        "1. Dữ liệu và lịch nghỉ", "2. Kiểm chứng và dự báo", "3. Chốt phương án", "4. Trợ lý AI", "5. Find Seed"])
     history, future, signature = None, None, None
     input_errors, notes, holidays, calendar_note = [], [], {}, ""
     reviewed = False
     names = available_models()
-    versions = {p: version(p) for p in ["pandas", "numpy", "scikit-learn"]}
+    versions = {p: version(p) for p in ["pandas", "numpy", "scipy", "scikit-learn", "joblib", "threadpoolctl"]}
     if XGB in names:
         versions["xgboost"] = version("xgboost")
     with data_tab:
@@ -395,6 +464,10 @@ def main():
             for col in [TEMP, HUMIDITY]:
                 if col in history and col in future and not future[col].between(history[col].min(), history[col].max()).all():
                     notes.append(f"{col} của một số tháng dự báo nằm ngoài khoảng lịch sử; đây là trường hợp ngoại suy.")
+                if (col in history) != (col in future):
+                    notes.append(f"{col} chỉ có trong một bảng nên không được dùng, theo đúng quy tắc mã gốc.")
+            if (future["Date"] <= history["Date"].max()).any():
+                notes.append("Đang tính lại một số tháng lịch sử bằng toàn bộ tập học. Kết quả này không phải sai số dự báo ngoài mẫu.")
         for message in input_errors:
             st.error(message)
         for message in list(dict.fromkeys(notes)):
@@ -402,12 +475,11 @@ def main():
         if hist_raw is None or future_raw is None:
             st.info("Tải hai bảng theo tháng hoặc bật Dùng dữ liệu minh họa ở thanh bên để thử chương trình.")
         st.divider()
-        st.subheader("Ngày lễ, Tết và nghỉ bù áp dụng")
-        st.caption("Khai báo ngày cụ thể cho cả lịch sử và tương lai. Một ngày chỉ thuộc một loại; lễ/Tết thay thế thứ trong tuần.")
-        holiday_upload = st.file_uploader("Nhập lịch nghỉ (không bắt buộc)", type=["xlsx", "csv"], key="holiday_file")
-        holiday_raw = pd.DataFrame({"Ngày": pd.Series(dtype="datetime64[ns]"), "Loại": pd.Series(dtype="str")})
-        holiday_import_ok = True
-        holiday_key = "manual"
+        st.subheader("Số ngày lễ và Tết theo tháng")
+        st.caption("Bảng mặc định và cách quy đổi được giữ từ mã gốc. Dùng đúng bảng lịch đã dùng khi đối chiếu kết quả.")
+        holiday_upload = st.file_uploader("Nhập bảng lịch nghỉ (không bắt buộc)", type=["xlsx", "csv"], key="holiday_file")
+        holiday_raw = pd.DataFrame(DEFAULT_HOLIDAYS)
+        holiday_import_ok, holiday_key = True, "original"
         if holiday_upload:
             try:
                 content = holiday_upload.getvalue()
@@ -417,41 +489,31 @@ def main():
                 holiday_raw = (pd.read_csv(io.BytesIO(content)) if holiday_upload.name.lower().endswith(".csv")
                                else pd.read_excel(io.BytesIO(content), sheet_name="Lich_nghi"))
                 holiday_raw.columns = holiday_raw.columns.astype(str).str.strip()
-                if not {"Ngày", "Loại"}.issubset(holiday_raw):
-                    raise InputError("Tệp lịch nghỉ cần cột Ngày và Loại; Excel phải có sheet Lich_nghi.")
-                holiday_raw = holiday_raw[["Ngày", "Loại"]].dropna(how="all")
                 validate_holidays(holiday_raw)
-                holiday_raw["Ngày"] = pd.to_datetime(holiday_raw["Ngày"])
+                holiday_raw = holiday_raw[HOLIDAY_COLUMNS]
             except Exception:
-                st.error("Không đọc được lịch nghỉ. Dùng sheet Lich_nghi với cột Ngày (YYYY-MM-DD hoặc ô Date) và Loại (Lễ/Tết).")
+                st.error("Lịch nghỉ cần Năm, Tháng, Tết Âm, Lễ Nhỏ; Excel dùng sheet Lich_nghi.")
                 holiday_import_ok = False
         edited_holidays = st.data_editor(holiday_raw, num_rows="dynamic", hide_index=True,
-                                         column_config={"Ngày": st.column_config.DateColumn(format="DD/MM/YYYY", required=True),
-                                                        "Loại": st.column_config.SelectboxColumn(options=["Lễ", "Tết"], required=True)},
-                                         key=f"holiday_editor_{holiday_key}", width="stretch")
+            column_config={YEAR: st.column_config.NumberColumn(min_value=1900, max_value=2200, step=1),
+                           MONTH: st.column_config.NumberColumn(min_value=1, max_value=12, step=1),
+                           "Tết Âm": st.column_config.NumberColumn(min_value=0, step=1),
+                           "Lễ Nhỏ": st.column_config.NumberColumn(min_value=0, step=1)},
+            key=f"holiday_editor_{holiday_key}", width="stretch")
         try:
             holidays = validate_holidays(edited_holidays)
         except InputError as exc:
-            input_errors.append(str(exc))
-            st.error(str(exc))
+            input_errors.append(str(exc)); st.error(str(exc))
         if not holiday_import_ok:
             input_errors.append("Tệp lịch nghỉ chưa hợp lệ.")
-        if holidays:
-            calendar_note = "Đã khai báo ngày cụ thể; các ngày không khai báo được tính theo thứ trong tuần."
-            st.caption(f"Đã khai báo {len(holidays)} ngày. Phần mềm không tự xác định lịch này có đầy đủ hay không.")
-        else:
-            calendar_note = "Chưa khai báo lễ/Tết: chỉ tính theo thứ trong tuần."
-            st.info(calendar_note)
-        if demo:
-            reviewed = True
-        else:
-            reviewed = st.checkbox("Tôi đã rà soát lịch nghỉ cho cả hai tệp, hoặc chấp nhận giả định chưa xét lễ/Tết.",
-                                    key="calendar_reviewed")
-        with st.expander("Hiểu đúng thông tin cắt điện"):
-            st.write("Số ngày cắt điện tương đương phản ánh phần phạm vi dự báo bị ảnh hưởng và thời lượng, "
-                     "không phải số vụ cắt điện. Hệ số cắt điện là tỷ lệ sản lượng còn lại trong phần thời gian đó.")
-            st.write("Nếu có điện năng không cung cấp dự kiến, nên dùng dữ liệu này để hiệu chỉnh phương án. "
-                     "Không suy diễn một lần cắt điện cục bộ thành một ngày cắt điện toàn tỉnh.")
+        calendar_note = "Lịch theo số ngày/tháng và công thức gốc; tháng không khai báo có lễ/Tết bằng 0."
+        reviewed = holiday_import_ok and not input_errors
+        st.caption(f"Đã khai báo {len(holidays)} tháng. Thay đổi ở bảng này sẽ thay đổi đầu vào dự báo.")
+        with st.expander("Quy tắc ngày và đơn vị được giữ từ mã gốc"):
+            st.write("Ngày thường = số ngày lịch − thứ Hai − thứ Bảy − Chủ nhật − lễ − Tết − cắt điện; nếu âm lấy 0. "
+                     "Ngày lễ/Tết theo số lượng tháng; không tự chuyển sang lịch loại trừ ngày trùng của v2.")
+            st.write("Số ngày cắt điện được lấy phần nguyên bằng int() như mã gốc. "
+                     "Giữ cùng đơn vị kWh hoặc triệu kWh với bản cần đối chiếu vì mô hình gốc dùng log1p.")
 
     ready = history is not None and future is not None and not input_errors and reviewed and bool(area.strip())
     if ready:
@@ -461,13 +523,11 @@ def main():
     with forecast_tab:
         st.subheader("Đánh giá trước khi chọn mô hình")
         st.write("Mỗi kỳ kiểm chứng sử dụng ít nhất 24 tháng trước mốc dự báo để huấn luyện. "
-                 "Mô hình có WAPE thấp nhất trên cùng các kỳ hợp lệ được gợi ý làm cơ sở.")
+                 "Kết quả kiểm chứng để tham khảo; mô hình chốt mặc định vẫn là XGBoost như bản gốc.")
         st.caption("MAE/RMSE có cùng đơn vị với sản lượng; MAPE/WAPE tính bằng %. "
                    "Chỉ số thấp trên lịch sử không bảo đảm độ chính xác tương lai.")
         if not ready:
-            st.info("Hoàn tất dữ liệu và xác nhận giả định lịch nghỉ tại bước 1.")
-        if XGB not in names:
-            st.warning("Chưa cài XGBoost; ứng dụng vẫn chạy các mô hình còn lại. Cài requirements.txt để có đủ mô hình.")
+            st.info("Hoàn tất dữ liệu và kiểm tra bảng lịch nghỉ tại bước 1.")
         if st.button("Kiểm chứng và chạy dự báo", type="primary", disabled=not ready, key="run_forecast"):
             try:
                 bar = st.progress(0.0, text="Đang kiểm chứng theo thời gian…")
@@ -518,6 +578,12 @@ def main():
                                                  var_name="Mô hình", value_name=unit)
             st.plotly_chart(px.line(plot_frame, x="Date", y=unit, color="Mô hình", markers=True), width="stretch")
             st.dataframe(run["predictions"], hide_index=True, width="stretch")
+            with st.expander("Xu hướng nền và chênh lệch dự báo"):
+                explain_model = st.selectbox("Mô hình cần giải trình", [XGB, RF, NN], key="explain_model")
+                explain = run["predictions"][["Date", TREND, explain_model]].copy()
+                explain["Chênh lệch so với nền"] = explain[explain_model] - explain[TREND]
+                st.dataframe(explain, hide_index=True, width="stretch")
+                st.caption("Chênh lệch là phép trừ sau quy đổi về sản lượng, chưa phải tác động nhân quả của thời tiết hoặc lễ/Tết.")
             with st.expander("Các kỳ kiểm chứng và mốc huấn luyện"):
                 st.dataframe(run["backtest"], hide_index=True, width="stretch")
             st.caption("Xu hướng và Cùng kỳ là các mô hình đối chiếu. Chênh lệch giữa các mô hình không phải khoảng tin cậy thống kê.")
@@ -527,6 +593,8 @@ def main():
         render_scenarios(run, fresh, unit, operator)
     with ai_tab:
         render_ai(area, history, future, unit, run, fresh)
+    with seed_tab:
+        render_seed_scan(history, future, holidays, factors, ready, unit, signature)
 
 
 if __name__ == "__main__":
