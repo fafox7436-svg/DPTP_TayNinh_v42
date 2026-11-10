@@ -24,10 +24,18 @@ Nếu repository có thay đổi mới hơn gói v42 đã gửi, hãy đối chi
 1. Mở ứng dụng đã cập nhật và vào **Dữ liệu & lịch** để chỉnh ngày nghỉ.
 2. Ở **Lịch trực quan**, chọn tháng/năm, đánh dấu ngày Lễ/Tết/cắt điện, ghi chú và bấm **Áp dụng đánh dấu**. Lịch mẫu cần được đơn vị tự kiểm tra.
 3. Mở tab **🧮 Tính hệ số k**, tại **Phân tích hệ số k từ điện nhận – điện giao ngày** chọn nhiều file Excel theo ngày. File có sheet `Chiều nhận`, `Chiều giao`, cột `Mã điểm đo`, `Tên điểm đo` và các cột ngày 1–31 như file bạn đã gửi.
-4. Xác nhận năm/tháng, chọn phạm vi điểm đo và năm phân tích. Chọn tháng cần dự báo và ngày chốt; chương trình chỉ sử dụng các ngày trước ngày chốt. Chọn nhận trừ giao, chỉ nhận hoặc chỉ giao; xem các cảnh báo và số mẫu.
+4. Xác nhận năm/tháng, chọn phạm vi điểm đo và năm phân tích. Tất cả các năm đã tải được chọn mặc định; có thể bỏ chọn năm có phạm vi không phù hợp. Chọn tháng cần dự báo và ngày chốt; chương trình chỉ sử dụng các ngày trước ngày chốt. Chọn nhận trừ giao, chỉ nhận hoặc chỉ giao; xem các cảnh báo và số mẫu. Tệp giống nhau cùng tháng/chiều chỉ được tính một lần. Khi có nhiều phiên bản khác nhau của một chiều/tháng, chọn một bản hoặc bỏ qua kỳ đó; các tháng khác vẫn được tính.
 5. Nếu muốn, chọn các hệ số có dữ liệu để áp dụng riêng cho tháng dự báo. Các số bên thanh cấu hình là hệ số chung mặc định; hệ số đã chọn riêng được báo ở bên dưới và có hiệu lực cho tháng tương ứng. Trở lại **Dữ liệu & lịch** và tải sao lưu JSON sau khi chỉnh sửa lịch/hệ số để dùng lại khi ứng dụng khởi động phiên mới. File điện được tải lại từ máy khi cần.
 
 Điện nhận trừ điện giao là dòng điện ở phạm vi đo, chưa tự động bằng điện thương phẩm của 14 huyện. Các kỳ có thể thay đổi điểm đo; dữ liệu còn thiếu và số lượng năm quan sát ảnh hưởng độ tin cậy. Các giá trị k là thăm dò cần được đối chiếu và kiểm định, chưa phải chứng minh cải thiện dự báo.
+
+### Cách chương trình gợi ý cho tháng dự báo
+
+- Từng ngày lịch sử được chia cho mức trung vị của các ngày thường T3–T6 cùng tuần, hoặc cùng tháng khi không đủ ngày trong tuần. Không lấy dữ liệu từ ngày chốt trở đi.
+- Với T2, T7 và CN, chương trình ưu tiên các ngày trong cùng tháng dương lịch của những năm trước nếu có ít nhất 6 ngày thuộc từ 2 năm; nếu thiếu thì mở rộng tháng trước/sau, rồi đến toàn bộ các tháng được chọn. Ngưỡng này là quy tắc thăm dò để chọn mẫu, không phải cam kết độ tin cậy.
+- Nếu tháng dự báo có Lễ hoặc Tết, chương trình ưu tiên các ngày có ghi chú tương ứng trong lịch sử (ví dụ cùng `Mùng 1`), kể cả khi Tết chuyển giữa tháng 1 và tháng 2. Nếu thiếu nhãn tương ứng thì gộp ngày cùng loại và ghi rõ trong cột `Nguồn mẫu`.
+- Bảng ghi số ngày của tháng dự báo, k gợi ý, số ngày/tháng/năm dùng để tính, nguồn mẫu và lưu ý. Loại ngày không xuất hiện trong tháng hoặc không đủ dữ liệu thì không tự thay hệ số hiện tại. Có thể xem thử số ngày tương đương trước và sau khi áp dụng.
+- Muốn so sánh danh sách điểm đo ổn định qua các tháng, chọn **Điểm chung của tất cả tháng đã chọn**. Đây có thể chỉ là tập con, không nhất thiết đại diện toàn bộ khu vực dự báo.
 
 ## Kiểm tra và giới hạn
 

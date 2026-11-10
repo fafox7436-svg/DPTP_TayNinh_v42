@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+import copy
 import io
 import unittest
 from datetime import date
@@ -16,7 +17,9 @@ from forecast.calendar_utils import (build_month_calendar, coefficients_for_mont
 from forecast.config import DEFAULT_K
 from forecast.data import tao_dac_trung
 from forecast.daily_k import (read_daily_workbook, infer_period, combine_channels,
-                              describe_scope, build_daily_frame, estimate_k)
+                              describe_scope, build_daily_frame, estimate_k,
+                              group_channel_candidates, resolve_channel_groups,
+                              common_meter_ids, recommend_target_k)
 
 
 def example_excel(missing=False, include_giao=True):
@@ -43,6 +46,7 @@ class DailyDataTests(unittest.TestCase):
         self.assertEqual(infer_period('diennhanngay thang 01.2023xlsx.xlsx'), (2023, 1))
         self.assertEqual(infer_period('dien_2026-02.xlsx'), (2026, 2))
         self.assertEqual(infer_period('bao_cao.xlsx'), (None, None))
+        self.assertEqual(infer_period('dien nhan thang 3 nam 2025.xlsx'), (2025, 3))
 
     def test_receive_and_delivery_use_detail_only(self):
         item = read_daily_workbook(example_excel(), 'thang 01.2026.xlsx')
@@ -93,6 +97,73 @@ class DailyDataTests(unittest.TestCase):
         two['channels']['nhan']['meters'] = two['channels']['nhan']['meters'][:1]
         scope = describe_scope(combine_channels([one, two]))
         self.assertEqual(int(scope.iloc[1]['Điểm nhận không còn']), 1)
+
+    def test_many_files_duplicate_and_invalid_period_do_not_block_other_months(self):
+        base = read_daily_workbook(example_excel(), 'thang 01.2023.xlsx')
+        items = []
+        for year in range(2021, 2026):
+            for month in range(1, 13):
+                item = dict(base, year=year, month=month, filename=f'{month:02d}.{year}.xlsx')
+                items.append(item)
+        items.append(copy.deepcopy(items[0]))  # Same data is used once.
+        items.append(dict(base, year=None, month=None, filename='khong_ro.xlsx'))
+        different = copy.deepcopy(items[1])
+        different['filename'] = 'khac_02.2021.xlsx'
+        different['channels']['nhan']['meters'][0]['values'][1] += 1
+        items.append(different)
+        groups, invalid = group_channel_candidates(items)
+        resolved, conflicts = resolve_channel_groups(groups)
+        self.assertEqual(len(invalid), 1)
+        self.assertEqual(len(groups[(2021, 1, 'nhan')]), 1)
+        self.assertEqual(len(next(iter(groups[(2021, 1, 'nhan')].values()))['aliases']), 2)
+        self.assertEqual(len(conflicts), 1)
+        self.assertNotIn((2021, 2, 'nhan'), resolved)
+        self.assertIn((2021, 3, 'nhan'), resolved)
+        selection = next(iter(groups[(2021, 2, 'nhan')]))
+        resolved, conflicts = resolve_channel_groups(groups, {(2021, 2, 'nhan'): selection})
+        self.assertFalse(conflicts)
+        self.assertEqual(len(resolved), 120)
+        self.assertEqual(common_meter_ids(resolved, 'nhan'), {'A', 'B'})
+        all_days = build_daily_frame(resolved, date(2026, 1, 10), pd.DataFrame())
+        self.assertEqual(len(all_days), sum(366 if calendar.isleap(y) else 365 for y in range(2021, 2026)))
+        self.assertGreater(int(all_days['Hợp lệ'].sum()), 1800)
+
+    def test_forecast_month_prioritizes_matching_month(self):
+        rows = []
+        for year in (2024, 2025):
+            for month, k in ((1, .8), (2, 1.2)):
+                for day in pd.date_range(f'{year}-{month:02d}-01', periods=calendar.monthrange(year, month)[1]):
+                    if day.weekday() == 0:
+                        rows.append({'Ngày': day, 'Năm': year, 'Tháng': month, 'Loại': 'T2',
+                                     'Hợp lệ': True, 'Cắt điện xác nhận': False, 'Tỷ số ngày': k})
+        history = pd.DataFrame(rows)
+        jan = build_month_calendar(2026, 1, {}, k_dict=DEFAULT_K)
+        feb = build_month_calendar(2026, 2, {}, k_dict=DEFAULT_K)
+        jan_recs = recommend_target_k(history, jan).set_index('Mã')
+        feb_recs = recommend_target_k(history, feb).set_index('Mã')
+        self.assertAlmostEqual(jan_recs.loc['T2', 'k đề xuất'], .8)
+        self.assertAlmostEqual(feb_recs.loc['T2', 'k đề xuất'], 1.2)
+        self.assertIn('Cùng tháng', jan_recs.loc['T2', 'Nguồn mẫu'])
+
+    def test_tet_matches_lunar_stage_across_different_gregorian_months(self):
+        entries = [('10/02/2024', 'Mùng 1 Tết Giáp Thìn', .3),
+                   ('11/02/2024', 'Mùng 2 Tết Giáp Thìn', .6),
+                   ('29/01/2025', 'Mùng 1 Tết Ất Tỵ', .4),
+                   ('30/01/2025', 'Mùng 2 Tết Ất Tỵ', .5)]
+        history, notes = [], []
+        for day, note, ratio in entries:
+            timestamp = pd.to_datetime(day, dayfirst=True)
+            history.append({'Ngày': timestamp, 'Năm': timestamp.year, 'Tháng': timestamp.month,
+                            'Loại': 'Tet', 'Hợp lệ': True, 'Cắt điện xác nhận': False,
+                            'Tỷ số ngày': ratio})
+            notes.append({'Ngày': day, 'Loại': 'Tết', 'Ghi chú': note})
+        notes.extend([{'Ngày': '17/02/2026', 'Loại': 'Tết', 'Ghi chú': 'Mùng 1 Tết Bính Ngọ'},
+                      {'Ngày': '18/02/2026', 'Loại': 'Tết', 'Ghi chú': 'Mùng 2 Tết Bính Ngọ'}])
+        target = build_month_calendar(2026, 2, {}, pd.DataFrame(notes), k_dict=DEFAULT_K)
+        result = recommend_target_k(pd.DataFrame(history), target, pd.DataFrame(notes)).set_index('Mã')
+        self.assertAlmostEqual(result.loc['Tet', 'k đề xuất'], .45)
+        self.assertEqual(int(result.loc['Tet', 'Số năm mẫu']), 2)
+        self.assertIn('Cùng sự kiện', result.loc['Tet', 'Nguồn mẫu'])
 
     def test_baseline_holiday_and_confirmed_outage(self):
         records = []

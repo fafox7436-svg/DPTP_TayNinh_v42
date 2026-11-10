@@ -9,6 +9,7 @@ from __future__ import annotations
 import calendar
 import hashlib
 import io
+import json
 import re
 import unicodedata
 from collections import defaultdict
@@ -34,6 +35,9 @@ def infer_period(filename: str) -> tuple[int | None, int | None]:
     match = re.search(r'(20\d{2})[.\-_/\s]+(0?[1-9]|1[0-2])(?=\D|$)', name)
     if match:
         return int(match.group(1)), int(match.group(2))
+    match = re.search(r'(?:thang|t)\s*(0?[1-9]|1[0-2])\s*(?:nam|year)\s*(20\d{2})(?!\d)', name)
+    if match:
+        return int(match.group(2)), int(match.group(1))
     return None, None
 
 
@@ -110,7 +114,9 @@ def read_daily_workbook(content: bytes, filename: str) -> dict:
     matched = {}
     for sheet in book:
         n = _plain(sheet.title)
-        channel = 'nhan' if 'chieu nhan' in n else ('giao' if 'chieu giao' in n else None)
+        is_in = any(x in n for x in ('chieu nhan', 'dien nhan', 'san luong nhan')) or n.strip() == 'nhan'
+        is_out = any(x in n for x in ('chieu giao', 'dien giao', 'san luong giao')) or n.strip() == 'giao'
+        channel = 'nhan' if is_in and not is_out else ('giao' if is_out and not is_in else None)
         if channel:
             if channel in matched:
                 raise ValueError(f'Tệp có nhiều sheet {channel}; cần chọn lại tệp.')
@@ -145,6 +151,73 @@ def combine_channels(items: list[dict]) -> dict:
                                  'Hãy giữ một tệp cho mỗi chiều/tháng.')
             result[key] = {'data': channel, 'filename': item['filename'], 'sha256': item['sha256']}
     return result
+
+
+def _channel_signature(channel: dict) -> str:
+    """Identify identical channel data even when the workbook names differ."""
+    def number(value):
+        return float(value) if pd.notna(value) and np.isfinite(value) else None
+    meters = []
+    for meter in sorted(channel['meters'], key=lambda x: x['code']):
+        values = [[int(d), number(v)] for d, v in sorted(meter['values'].items())]
+        meters.append([meter['code'], values])
+    reported = [[int(d), number(v)] for d, v in sorted(channel['reported_total'].items())]
+    canonical = json.dumps([channel['days'], meters, reported], separators=(',', ':'), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def group_channel_candidates(items: list[dict]) -> tuple[dict, list[dict]]:
+    """Group uploads by month/direction; isolate bad periods instead of stopping all."""
+    groups, problems = {}, []
+    for item in items:
+        try:
+            y, m = int(item['year']), int(item['month'])
+            if not 2000 <= y <= 2100:
+                raise ValueError('Năm nằm ngoài 2000–2100')
+            calendar.monthrange(y, m)
+        except (ValueError, TypeError, KeyError, OverflowError):
+            problems.append({'Tệp': item.get('filename', '?'),
+                             'Lý do': 'Chưa xác nhận tháng và năm hợp lệ'})
+            continue
+        for direction, channel in item['channels'].items():
+            key = (y, m, direction)
+            signature = _channel_signature(channel)
+            versions = groups.setdefault(key, {})
+            if signature not in versions:
+                versions[signature] = {'data': channel, 'filename': item['filename'],
+                                       'sha256': item['sha256'], 'aliases': [item['filename']]}
+            else:
+                versions[signature]['aliases'].append(item['filename'])
+    return groups, problems
+
+
+def resolve_channel_groups(groups: dict, decisions: dict | None = None) -> tuple[dict, list[dict]]:
+    """Deduplicate identical readings; do not silently select conflicting versions."""
+    decisions = decisions or {}
+    channels, conflicts = {}, []
+    for key, versions in sorted(groups.items()):
+        if len(versions) == 1:
+            channels[key] = next(iter(versions.values()))
+        elif decisions.get(key) in versions:
+            channels[key] = versions[decisions[key]]
+        else:
+            conflicts.append({'Năm': key[0], 'Tháng': key[1],
+                              'Chiều': 'Nhận' if key[2] == 'nhan' else 'Giao',
+                              'Số phiên bản khác nhau': len(versions),
+                              'Trạng thái': 'Chưa chọn; bỏ qua chiều này'})
+    return channels, conflicts
+
+
+def common_meter_ids(channels: dict, direction: str) -> set[str]:
+    """Codes present in every month being analyzed for this direction."""
+    months = sorted({(y, m) for y, m, _ in channels})
+    sets = []
+    for y, m in months:
+        channel = channels.get((y, m, direction))
+        if channel is None:
+            return set()
+        sets.append({r['code'] for r in channel['data']['meters']})
+    return set.intersection(*sets) if sets else set()
 
 
 def meter_choices(channels: dict, direction: str) -> dict[str, str]:
@@ -326,3 +399,127 @@ def estimate_k(days: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                     'Q75': float(vals.quantile(.75)) if len(vals) else np.nan,
                     'Số nghi ngờ': 0})
     return df, pd.DataFrame(results)
+
+
+def _event_key(note: object, kind: str) -> str | None:
+    """Conservative matches for labelled holidays; never infer an unlabeled date."""
+    if pd.isna(note):
+        return None
+    text = re.sub(r'\s+', ' ', _plain(note)).strip()
+    if not text:
+        return None
+    if kind == 'Tet':
+        match = re.search(r'\bmung\s*(\d{1,2})\b', text)
+        if match:
+            return 'mung-' + match.group(1)
+        match = re.search(r'\b(2[0-9]|30)\s*tet\b', text)
+        if match:
+            return 'truoc-tet-' + match.group(1)
+        return None
+    if kind == 'Le':
+        known = [('duong lich', 'tet-duong-lich'), ('gio to', 'gio-to'),
+                 ('chien thang', '30-4'), ('30/4', '30-4'),
+                 ('quoc te lao dong', '1-5'), ('1/5', '1-5'),
+                 ('quoc khanh', 'quoc-khanh'), ('2/9', 'quoc-khanh')]
+        for token, key in known:
+            if token in text:
+                return key
+    return None
+
+
+def recommend_target_k(detail: pd.DataFrame, target_calendar: pd.DataFrame,
+                       holiday_notes: pd.DataFrame | None = None,
+                       overall: pd.DataFrame | None = None,
+                       min_days: int = 6, min_years: int = 2) -> pd.DataFrame:
+    """Suggest coefficients for the target calendar from prior eligible observations.
+
+    Priority and thresholds are transparent heuristics, not evidence of optimality.
+    Target holidays use labelled comparable holiday stages where available.
+    """
+    labels = {'T2': 'Thứ Hai', 'T7': 'Thứ Bảy', 'CN': 'Chủ nhật',
+              'Le': 'Lễ', 'Tet': 'Tết', 'CatDien': 'Cắt điện'}
+    if target_calendar.empty:
+        return pd.DataFrame()
+    target_dates = pd.to_datetime(target_calendar['Ngày'])
+    target_month = int(target_dates.iloc[0].month)
+    note_lookup = {}
+    if holiday_notes is not None and not holiday_notes.empty:
+        for _, r in holiday_notes.iterrows():
+            d = pd.to_datetime(r.get('Ngày'), errors='coerce', dayfirst=True)
+            if pd.notna(d):
+                note_lookup[d.date()] = r.get('Ghi chú', '')
+    hist = detail[detail['Hợp lệ'] & ~detail['Cắt điện xác nhận'] & detail['Tỷ số ngày'].notna()].copy()
+    hist['Sự kiện'] = [
+        _event_key(note_lookup.get(pd.Timestamp(day).date()), kind)
+        for day, kind in zip(hist['Ngày'], hist['Loại'])
+    ]
+    data_rows = []
+    for kind, label in labels.items():
+        target_group = (target_calendar[target_calendar['Cat_Dien']]
+                        if kind == 'CatDien' else target_calendar[target_calendar['Category'] == kind])
+        n_target = len(target_group)
+        result = {'Mã': kind, 'Loại ngày': label, 'Số ngày dự báo': n_target,
+                  'k đề xuất': np.nan, 'Số ngày mẫu': 0, 'Số tháng mẫu': 0,
+                  'Số năm mẫu': 0, 'Nguồn mẫu': 'Không xuất hiện trong lịch tháng dự báo',
+                  'Q25': np.nan, 'Q75': np.nan, 'Lưu ý': ''}
+        if n_target == 0:
+            data_rows.append(result)
+            continue
+        if kind == 'CatDien':
+            matching = overall[overall['Mã'] == 'CatDien'] if overall is not None and not overall.empty else pd.DataFrame()
+            if not matching.empty and pd.notna(matching.iloc[0]['k trung vị']):
+                row = matching.iloc[0]
+                result.update({'k đề xuất': float(row['k trung vị']), 'Số ngày mẫu': int(row['Số ngày']),
+                               'Số tháng mẫu': int(row['Số tháng']), 'Số năm mẫu': int(row['Số năm']),
+                               'Q25': row['Q25'], 'Q75': row['Q75'],
+                               'Nguồn mẫu': 'Cắt điện đã xác nhận; so với ngày cùng loại'})
+            else:
+                result['Nguồn mẫu'] = 'Chưa đủ ngày cắt điện và ngày đối chứng'
+            if result['Số ngày mẫu'] < min_days or result['Số năm mẫu'] < min_years:
+                result['Lưu ý'] = 'Ít dữ liệu; cần kiểm tra cắt điện và phạm vi ảnh hưởng.'
+            data_rows.append(result)
+            continue
+        candidates = hist[hist['Loại'] == kind].copy()
+        if candidates.empty:
+            result['Nguồn mẫu'] = 'Không có ngày cùng loại hợp lệ trước mốc chốt'
+            result['Lưu ý'] = 'Chưa đề xuất hệ số.'
+            data_rows.append(result)
+            continue
+        estimate = None
+        if kind in ('Tet', 'Le'):
+            stage_keys = [_event_key(note_lookup.get(pd.Timestamp(d).date()), kind)
+                          for d in target_group['Ngày']]
+            keys = set(stage_keys)
+            if None not in keys and keys and keys.issubset(set(candidates['Sự kiện'].dropna())):
+                chosen = candidates[candidates['Sự kiện'].isin(keys)]
+                by_event = chosen.groupby('Sự kiện')['Tỷ số ngày'].median()
+                estimate = float(np.mean([by_event[k] for k in stage_keys]))
+                basis = 'Cùng sự kiện/ngày Tết; trung vị theo từng nhãn'
+            else:
+                chosen = candidates
+                basis = 'Gộp các ngày cùng loại Lễ/Tết; thiếu nhãn tương ứng'
+                result['Lưu ý'] = 'Các kỳ nghỉ có thể khác nhau; cần đối chiếu ghi chú lịch.'
+        else:
+            same = candidates[candidates['Tháng'] == target_month]
+            delta = (candidates['Tháng'] - target_month).abs()
+            nearby = candidates[np.minimum(delta, 12 - delta) <= 1]
+            if len(same) >= min_days and same['Năm'].nunique() >= min_years:
+                chosen, basis = same, 'Cùng tháng dương lịch các năm trước'
+            elif len(nearby) >= min_days and nearby[['Năm', 'Tháng']].drop_duplicates().shape[0] >= 2:
+                chosen, basis = nearby, 'Tháng dự báo và tháng lân cận (±1)'
+                result['Lưu ý'] = 'Cùng tháng chưa đủ mẫu; đã mở rộng tháng lân cận.'
+            else:
+                chosen, basis = candidates, 'Toàn bộ tháng có dữ liệu trước mốc chốt'
+                result['Lưu ý'] = 'Chưa đủ cùng tháng/lân cận; dùng mẫu rộng để tham khảo.'
+        values = chosen['Tỷ số ngày']
+        if estimate is None:
+            estimate = float(values.median())
+        n_years = int(chosen['Năm'].nunique())
+        result.update({'k đề xuất': estimate, 'Số ngày mẫu': len(chosen),
+                       'Số tháng mẫu': chosen[['Năm', 'Tháng']].drop_duplicates().shape[0],
+                       'Số năm mẫu': n_years, 'Nguồn mẫu': basis,
+                       'Q25': float(values.quantile(.25)), 'Q75': float(values.quantile(.75))})
+        if len(chosen) < min_days or n_years < min_years:
+            result['Lưu ý'] = (result['Lưu ý'] + ' Mẫu ít hoặc chỉ một năm; độ ổn định chưa rõ.').strip()
+        data_rows.append(result)
+    return pd.DataFrame(data_rows)
