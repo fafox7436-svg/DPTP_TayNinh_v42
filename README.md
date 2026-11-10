@@ -1,5 +1,7 @@
 # Dự báo điện thương phẩm — giao diện nâng cấp, lõi mô hình gốc
 
+> **Cập nhật 10/11/2026:** Bản mã này tích hợp lịch ghi chú và phân tích hệ số k từ điện nhận/giao. Hãy đọc [HUONG_DAN_CAP_NHAT_GITHUB.md](HUONG_DAN_CAP_NHAT_GITHUB.md) trước khi cập nhật GitHub. `app.py` sử dụng thư mục `forecast/`; cả `app.py` và `chay_web.py` đều được hỗ trợ làm điểm khởi động Streamlit. Các nội dung và kết quả kiểm tra ở những phần cũ bên dưới mô tả phiên bản trước, không chứng minh bản mới đã chạy trên môi trường Streamlit của người dùng.
+
 Phiên bản `2.1.0-loi-goc`. Bộ mã đầy đủ phát triển từ mã nguồn Lê Minh Trí đã cung cấp và giao diện v2. Mục tiêu của bản này là khôi phục phép tính gốc, không thay đổi mô hình để tạo kết quả khác.
 
 ## 1. Triển khai từ GitHub lên Streamlit Community Cloud

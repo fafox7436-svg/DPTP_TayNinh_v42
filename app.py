@@ -27,10 +27,13 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from forecast.ai import danh_sach_model_gemini, xu_ly_du_lieu_dinh_tinh
+from forecast.daily_ui import render_empirical_k_calculator
+from forecast.calendar_state import dump_calendar, load_calendar
 from forecast.calendar_utils import (
     CATEGORY_LABELS,
     build_month_calendar,
     calendar_detail_for_dataframe,
+    coefficients_for_month,
     normalize_holiday_dates,
     outage_dates_for_month,
 )
@@ -382,15 +385,14 @@ def render_interactive_day_marker(available_ym: list[tuple[int, int]],
         '**Nghỉ Lễ**, **Nghỉ Tết** hoặc **Cắt điện**. Khi bấm lưu, hệ thống sẽ tự động cập nhật vào bảng ngày cụ thể.'
     )
 
-    if not available_ym:
-        available_ym = [(2026, m) for m in range(1, 13)]
-
-    ym_labels = [f'Tháng {m:02d}/{y}' for y, m in available_ym]
     c_sel1, c_sel2, c_sel3 = st.columns([2, 2, 2])
     with c_sel1:
-        chosen_label = st.selectbox('Chọn tháng hiển thị lịch', ym_labels, index=len(ym_labels) - 1, key='visual_cal_ym')
-        sel_idx = ym_labels.index(chosen_label)
-        sel_year, sel_month = available_ym[sel_idx]
+        today = dt.date.today()
+        sel_year = int(st.number_input('Năm xem lịch', min_value=2000, max_value=2100,
+                                       value=today.year, step=1, key='visual_cal_year'))
+        sel_month = int(st.selectbox('Tháng xem lịch', list(range(1, 13)),
+                                     index=today.month - 1, key='visual_cal_month'))
+        chosen_label = f'Tháng {sel_month:02d}/{sel_year}'
 
     fallback_outage_count = 0
     for df_src in [df_input, df_train]:
@@ -433,7 +435,7 @@ def render_interactive_day_marker(available_ym: list[tuple[int, int]],
         st.metric('Tổng ngày tương đương tháng này', f'{total_equiv:.3f} ngày')
     with c_sel3:
         n_off = int(cal_preview_df['Category'].isin(['T7', 'CN', 'Le', 'Tet']).sum())
-        st.metric('Tổng ngày nghỉ (T7 + CN + Lễ/Tết)', f'{n_off} ngày')
+        st.metric('Số ngày T7, CN, lễ/Tết', f'{n_off} ngày')
 
     render_visual_month_calendar(cal_preview_df, sel_year, sel_month, notes_map=month_holiday_note)
 
@@ -479,7 +481,7 @@ def render_interactive_day_marker(available_ym: list[tuple[int, int]],
                 ),
                 'Ghi chú ngày nghỉ': st.column_config.TextColumn(
                     'Ghi chú',
-                    help='Ví dụ: Giỗ Tổ Hùng Vương, Nghỉ bù 30/4...'
+                    help='Ví dụ: Giỗ Tổ, nghỉ bù, hoạt động của khu công nghiệp...'
                 ),
             },
             height=360,
@@ -506,11 +508,13 @@ def render_interactive_day_marker(available_ym: list[tuple[int, int]],
             new_outage_dates = []
             for _, r in edited_month_days.iterrows():
                 mark = r['Đánh dấu ngày nghỉ']
-                if mark in ['Lễ', 'Tết']:
+                note = r.get('Ghi chú ngày nghỉ', '')
+                note = '' if pd.isna(note) else str(note).strip()
+                if mark in ['Lễ', 'Tết'] or note:
                     kept_rows.append({
                         'Ngày': r['Ngày'],
-                        'Loại': mark,
-                        'Ghi chú': str(r.get('Ghi chú ngày nghỉ', '') or '').strip(),
+                        'Loại': mark if mark in ['Lễ', 'Tết'] else 'Ghi chú',
+                        'Ghi chú': note,
                     })
                 if bool(r.get('Cắt điện', False)):
                     new_outage_dates.append(r['Ngày'])
@@ -519,525 +523,13 @@ def render_interactive_day_marker(available_ym: list[tuple[int, int]],
                 kept_rows, columns=['Ngày', 'Loại', 'Ghi chú']
             )
             st.session_state.setdefault('custom_outage_Overrides', {})
-            st.session_state['custom_outage_Overrides'][(sel_year, sel_month)] = ', '.join(new_outage_dates)
+            st.session_state['custom_outage_Overrides'][(sel_year, sel_month)] = (
+                ', '.join(new_outage_dates) if new_outage_dates else 'Không có'
+            )
+            st.session_state.setdefault('calendar_confirmed_months', set()).add((sel_year, sel_month))
             st.session_state['cal_sync_ver'] = st.session_state.get('cal_sync_ver', 0) + 1
             st.success(f'Đã cập nhật lịch nghỉ và ngày cắt điện cho {chosen_label}.')
             st.rerun()
-
-
-# -------- MODULE TÍNH HỆ SỐ K THỰC NGHIỆM TỪ NHIỀU FILE ĐIỆN NHẬN NGÀY --------
-def _extract_31_days_from_sheet(df: pd.DataFrame) -> np.ndarray:
-    """Trích xuất chính xác mảng 31 ngày theo định danh cột '1'..'31' (bất chấp thứ tự cột bị đảo)."""
-    if df is None or df.empty:
-        return np.zeros(31, dtype=float)
-    if 'Tên điểm đo' in df.columns:
-        meter_rows = df[df['Tên điểm đo'].notna()]
-    else:
-        meter_rows = df.iloc[:-1]
-
-    vals = []
-    for d in range(1, 32):
-        col = str(d) if str(d) in df.columns else (d if d in df.columns else None)
-        if col is None:
-            vals.append(0.0)
-        else:
-            s = pd.to_numeric(meter_rows[col], errors='coerce').sum()
-            if (s == 0 or pd.isna(s)) and len(df) > 0:
-                last_v = pd.to_numeric(pd.Series([df.iloc[-1][col]]), errors='coerce').fillna(0.0).iloc[0]
-                s = float(last_v)
-            vals.append(float(s))
-    return np.array(vals, dtype=float)
-
-
-def _auto_detect_ym_from_file(filename: str, net_31: np.ndarray) -> tuple[int, int, str]:
-    """Tự động nhận diện (Năm, Tháng) từ tên file hoặc từ quy luật giảm tải ngày Chủ Nhật."""
-    s = filename.lower()
-    m1 = re.search(r'(?:thang|tháng|t)?\s*(0?[1-9]|1[0-2])[\.\-_/\s]+(20\d{2})', s)
-    if m1:
-        return int(m1.group(2)), int(m1.group(1)), 'Từ tên file (Tháng/Năm)'
-    m2 = re.search(r'(20\d{2})[\.\-_/\s]+(0?[1-9]|1[0-2])', s)
-    if m2:
-        return int(m2.group(1)), int(m2.group(2)), 'Từ tên file (Năm/Tháng)'
-
-    valid_days = int(np.sum(net_31 > 0))
-    if valid_days < 28:
-        valid_days = 30
-
-    m3 = re.search(r'(?:thang|tháng|t)\s*(0?[1-9]|1[0-2])\b', s)
-    cand_months = [int(m3.group(1))] if m3 else [
-        m for m in range(1, 13) if calendar.monthrange(2026, m)[1] == valid_days or m == 2
-    ]
-
-    best_score = 999.0
-    best_ym = (2026, cand_months[0] if cand_months else 1)
-    for y in range(2023, 2030):
-        for m in cand_months:
-            nd = calendar.monthrange(y, m)[1]
-            if nd != valid_days and valid_days in [28, 29, 30, 31]:
-                continue
-            arr = net_31[:nd]
-            if len(arr) < nd or np.mean(arr) <= 0:
-                continue
-            sun_idx = [d - 1 for d in range(1, nd + 1) if calendar.weekday(y, m, d) == 6]
-            wk_idx = [d - 1 for d in range(1, nd + 1) if calendar.weekday(y, m, d) in (1, 2, 3, 4)]
-            if not sun_idx or not wk_idx:
-                continue
-            denom = np.median(arr[wk_idx])
-            if denom <= 0:
-                continue
-            ratio = float(np.median(arr[sun_idx]) / denom)
-            if ratio < best_score:
-                best_score = ratio
-                best_ym = (y, m)
-    return best_ym[0], best_ym[1], f'Tự động dò chu kỳ Chủ Nhật (k_CN≈{best_score:.2f})'
-
-
-@st.cache_data(show_spinner=False)
-def parse_single_daily_excel_bytes(file_bytes: bytes, filename: str) -> dict:
-    """Đọc 1 file Excel điện nhận - điện giao ngày từ bộ nhớ đệm."""
-    import io
-    bio = io.BytesIO(file_bytes)
-    xls = pd.ExcelFile(bio)
-
-    def read_sh(name_candidates):
-        for nm in name_candidates:
-            if nm in xls.sheet_names:
-                bio.seek(0)
-                return _extract_31_days_from_sheet(pd.read_excel(bio, sheet_name=nm))
-        return np.zeros(31, dtype=float)
-
-    nhan = read_sh(['Chiều nhận', 'Chieu nhan'])
-    giao = read_sh(['Chiều giao', 'Chieu giao'])
-    edc = read_sh(['EDC'])
-    nmdmt = read_sh(['NMĐMT', 'NMDMT'])
-    net_default = nhan - giao - edc
-    det_y, det_m, det_src = _auto_detect_ym_from_file(filename, net_default)
-    return {
-        'filename': filename,
-        'det_year': det_y,
-        'det_month': det_m,
-        'det_source': det_src,
-        'nhan': nhan,
-        'giao': giao,
-        'edc': edc,
-        'nmdmt': nmdmt,
-    }
-
-
-def render_empirical_k_calculator(holiday_dates: pd.DataFrame,
-                                  outage_dates_map: dict,
-                                  k_default: dict):
-    """Giao diện tải nhiều file Điện nhận - Điện giao ngày để tính toán khách quan bộ hệ số k."""
-    st.subheader('🧮 Tính toán khách quan hệ số k từ bộ file Điện nhận – Điện giao ngày (01/2023 – nay)')
-    st.caption(
-        'Đổ trực tiếp một hoặc nhiều file `diennhanngay...xlsx` (từ tháng 01/2023 đến tháng 10/2026 và các tháng sau này). '
-        'Hệ thống sẽ tự động bóc tách `Chiều nhận`, `Chiều giao`, `EDC`, `NMĐMT` của từng ngày, đối chiếu lịch nghỉ Lễ/Tết/Cắt điện '
-        'và chuẩn hóa theo đường cơ sở Thứ Ba – Thứ Sáu từng tuần để xác định bộ hệ số **k** khách quan nhất.'
-    )
-
-    uploaded_daily_files = st.file_uploader(
-        '📂 Tải lên các file Điện nhận – Điện giao ngày (chọn nhiều file cùng lúc)',
-        type=['xlsx', 'xls'],
-        accept_multiple_files=True,
-        key='daily_power_files_uploader',
-    )
-
-    if not uploaded_daily_files:
-        st.info('💡 Hãy chọn hoặc kéo thả các file `diennhanngay...xlsx` vào ô trên để hệ thống tự động phân tích và tính hệ số k.')
-        return
-
-    parsed_items = []
-    for uf in uploaded_daily_files:
-        try:
-            item = parse_single_daily_excel_bytes(uf.getvalue(), uf.name)
-            parsed_items.append(item)
-        except Exception as exc:
-            st.warning(f'Không đọc được file `{uf.name}`: {exc}')
-
-    if not parsed_items:
-        return
-
-    # 1. Bảng kiểm tra & xác nhận Tháng/Năm của từng file
-    with st.expander(f'📋 Kiểm tra / Chỉnh sửa Tháng & Năm của {len(parsed_items)} file đã tải lên', expanded=False):
-        meta_rows = []
-        for it in parsed_items:
-            nd_guess = calendar.monthrange(it['det_year'], it['det_month'])[1]
-            meta_rows.append({
-                'Tên file': it['filename'],
-                'Tháng': int(it['det_month']),
-                'Năm': int(it['det_year']),
-                'Tổng Chiều nhận (kWh)': float(np.sum(it['nhan'][:nd_guess])),
-                'Tổng Chiều giao (kWh)': float(np.sum(it['giao'][:nd_guess])),
-                'Tổng EDC (kWh)': float(np.sum(it['edc'][:nd_guess])),
-                'Nguồn nhận diện': it['det_source'],
-            })
-        meta_df = pd.DataFrame(meta_rows)
-        edited_meta_df = st.data_editor(
-            meta_df,
-            hide_index=True,
-            use_container_width=True,
-            disabled=['Tên file', 'Tổng Chiều nhận (kWh)', 'Tổng Chiều giao (kWh)', 'Tổng EDC (kWh)', 'Nguồn nhận diện'],
-            key='daily_files_meta_editor',
-            column_config={
-                'Tháng': st.column_config.NumberColumn('Tháng', min_value=1, max_value=12, step=1),
-                'Năm': st.column_config.NumberColumn('Năm', min_value=2020, max_value=2035, step=1),
-                'Tổng Chiều nhận (kWh)': st.column_config.NumberColumn(format='%.0f'),
-                'Tổng Chiều giao (kWh)': st.column_config.NumberColumn(format='%.0f'),
-                'Tổng EDC (kWh)': st.column_config.NumberColumn(format='%.0f'),
-            },
-        )
-
-    # 2. Cấu hình phương pháp tính toán khách quan
-    cfg1, cfg2, cfg3 = st.columns([2.2, 2.0, 1.8])
-    with cfg1:
-        formula_mode = st.selectbox(
-            'Công thức tính phụ tải ngày:',
-            [
-                'Chiều nhận - Chiều giao - EDC (Phụ tải nội tỉnh chuẩn)',
-                'Chiều nhận - Chiều giao (Bao gồm EDC)',
-                'Chiều nhận - Chiều giao - EDC - NMĐMT (Trừ mặt trời 110kV)',
-                'Chỉ lấy tổng Chiều nhận',
-            ],
-            index=0,
-            key='k_calc_formula_mode',
-        )
-    with cfg2:
-        agg_mode = st.selectbox(
-            'Phương pháp tổng hợp thống kê:',
-            [
-                'Trung bình chuẩn hóa theo tuần (Mean - Chuẩn)',
-                'Trung vị chuẩn hóa theo tuần (Median - Kháng nhiễu)',
-                'Trung bình chuẩn hóa theo tháng (Monthly Mean)',
-            ],
-            index=0,
-            key='k_calc_agg_mode',
-        )
-    with cfg3:
-        auto_detect_outage = st.checkbox(
-            '🔍 Tự động tách ngày cắt điện/giảm tải sâu',
-            value=True,
-            help='Tự động phát hiện các ngày bị sụt giảm sản lượng bất thường (< 93.5% mức trung vị của cùng loại ngày) để tính riêng hệ số k_Cắt điện và không làm nhiễu k_T2, k_T7, k_CN.',
-            key='k_calc_auto_outage',
-        )
-
-    # Chuẩn bị bảng tra cứu ngày nghỉ Lễ / Tết cụ thể
-    hol_lookup: dict[tuple[int, int, int], str] = {}
-    if holiday_dates is not None and not holiday_dates.empty:
-        for _, r in holiday_dates.iterrows():
-            try:
-                dt_v = pd.to_datetime(r['Ngày'], dayfirst=True)
-                loai = str(r['Loại']).strip()
-                hol_lookup[(int(dt_v.year), int(dt_v.month), int(dt_v.day))] = 'Tet' if 'tết' in loai.lower() or 'tet' in loai.lower() else 'Le'
-            except Exception:
-                continue
-
-    # Tổng hợp dữ liệu từng ngày từ toàn bộ các file đã tải
-    daily_records = []
-    dow_vi = {0: 'T2', 1: 'T3', 2: 'T4', 3: 'T5', 4: 'T6', 5: 'T7', 6: 'CN'}
-    for idx, it in enumerate(parsed_items):
-        y = int(edited_meta_df.iloc[idx]['Năm'])
-        m = int(edited_meta_df.iloc[idx]['Tháng'])
-        num_days = calendar.monthrange(y, m)[1]
-        first_wd = calendar.weekday(y, m, 1)
-
-        outage_str = outage_dates_map.get((y, m), '')
-        manual_outage_days = _parse_outage_days_set(outage_str, y, m)
-
-        nhan_arr = it['nhan'][:num_days]
-        giao_arr = it['giao'][:num_days]
-        edc_arr = it['edc'][:num_days]
-        nmdmt_arr = it['nmdmt'][:num_days]
-
-        if formula_mode.startswith('Chiều nhận - Chiều giao - EDC - NMĐMT'):
-            net_arr = nhan_arr - giao_arr - edc_arr - nmdmt_arr
-        elif formula_mode.startswith('Chiều nhận - Chiều giao - EDC'):
-            net_arr = nhan_arr - giao_arr - edc_arr
-        elif formula_mode.startswith('Chiều nhận - Chiều giao'):
-            net_arr = nhan_arr - giao_arr
-        else:
-            net_arr = nhan_arr.copy()
-
-        month_rows = []
-        for d in range(1, num_days + 1):
-            wd = calendar.weekday(y, m, d)
-            week_num = (d + first_wd - 1) // 7 + 1
-            if (y, m, d) in hol_lookup:
-                base_cat = hol_lookup[(y, m, d)]
-            else:
-                base_cat = 'T2' if wd == 0 else ('T7' if wd == 5 else ('CN' if wd == 6 else 'Thuong'))
-
-            is_manual_outage = d in manual_outage_days
-            month_rows.append({
-                'Filename': it['filename'],
-                'Year': y,
-                'Month': m,
-                'YM': f'{m:02d}/{y}',
-                'Day': d,
-                'Date_Obj': dt.date(y, m, d),
-                'Date': f'{d:02d}/{m:02d}/{y}',
-                'Thu': dow_vi[wd],
-                'Week': week_num,
-                'Base_Category': base_cat,
-                'Manual_Outage': is_manual_outage,
-                'Chieu_Nhan': float(nhan_arr[d - 1]),
-                'Chieu_Giao': float(giao_arr[d - 1]),
-                'EDC': float(edc_arr[d - 1]),
-                'NMDMT': float(nmdmt_arr[d - 1]),
-                'Net_Load': float(net_arr[d - 1]),
-            })
-
-        df_m = pd.DataFrame(month_rows)
-        # Tính đường cơ sở Ngày thường (T3-T6 không dính cắt điện thủ công) theo từng tuần & cả tháng
-        normal_mask = (df_m['Base_Category'] == 'Thuong') & (~df_m['Manual_Outage']) & (df_m['Net_Load'] > 0)
-        if not normal_mask.any():
-            normal_mask = df_m['Net_Load'] > 0
-
-        month_base_val = float(df_m.loc[normal_mask, 'Net_Load'].mean())
-        week_bases = df_m.loc[normal_mask].groupby('Week')['Net_Load'].mean().to_dict()
-        all_weeks = sorted(df_m['Week'].unique())
-        valid_weeks = [w for w in all_weeks if w in week_bases and not np.isnan(week_bases[w]) and week_bases[w] > 0]
-        for w in all_weeks:
-            if w not in valid_weeks:
-                if valid_weeks:
-                    nearest_w = min(valid_weeks, key=lambda x: abs(x - w))
-                    week_bases[w] = week_bases[nearest_w]
-                else:
-                    week_bases[w] = month_base_val
-
-        df_m['Week_Base'] = df_m['Week'].map(week_bases)
-        df_m['Month_Base'] = month_base_val
-        df_m['k_Week'] = np.where(df_m['Week_Base'] > 0, df_m['Net_Load'] / df_m['Week_Base'], np.nan)
-        df_m['k_Month'] = np.where(df_m['Month_Base'] > 0, df_m['Net_Load'] / df_m['Month_Base'], np.nan)
-        daily_records.append(df_m)
-
-    df_all_days = pd.concat(daily_records, ignore_index=True)
-    df_all_days = df_all_days.drop_duplicates(subset=['Year', 'Month', 'Day'], keep='last').sort_values(['Year', 'Month', 'Day']).reset_index(drop=True)
-
-    k_col = 'k_Month' if 'Monthly' in agg_mode else 'k_Week'
-
-    # Xác định ngày cắt điện (thủ công hoặc tự động phát hiện giảm tải sâu < 93.5% trung vị nhóm)
-    cat_medians = df_all_days[~df_all_days['Manual_Outage']].groupby('Base_Category')[k_col].median().to_dict()
-    is_outage_list = []
-    outage_ratio_list = []
-    for _, r in df_all_days.iterrows():
-        bcat = r['Base_Category']
-        k_val = r[k_col]
-        med_val = cat_medians.get(bcat, 1.0)
-        is_out = bool(r['Manual_Outage'])
-        if auto_detect_outage and not is_out and bcat in ['Thuong', 'T2', 'T7', 'CN'] and pd.notna(k_val) and med_val > 0:
-            if k_val < 0.935 * med_val:
-                is_out = True
-        is_outage_list.append(is_out)
-        outage_ratio_list.append(float(k_val / med_val) if (is_out and pd.notna(k_val) and med_val > 0) else np.nan)
-
-    df_all_days['Is_Outage'] = is_outage_list
-    df_all_days['k_Outage_Ratio'] = outage_ratio_list
-
-    # Tính toán bảng thống kê cho từng nhóm ngày (trên các ngày không bị cắt điện để đảm bảo hệ số thuần)
-    clean_days = df_all_days[~df_all_days['Is_Outage']].copy()
-    if clean_days.empty:
-        clean_days = df_all_days.copy()
-
-    use_median = 'Median' in agg_mode
-    computed_k = {}
-    summary_rows = []
-    cat_Display_map = {
-        'Thuong': ('Ngày thường (T3–T6)', 1.0),
-        'T2': ('Thứ Hai (T2)', k_default['T2']),
-        'T7': ('Thứ Bảy (T7)', k_default['T7']),
-        'CN': ('Chủ Nhật (CN)', k_default['CN']),
-        'Le': ('Nghỉ Lễ (Lễ nhỏ)', k_default['Le']),
-        'Tet': ('Nghỉ Tết Âm lịch', k_default['Tet']),
-    }
-
-    for key in ['Thuong', 'T2', 'T7', 'CN', 'Le', 'Tet']:
-        sub = clean_days[clean_days['Base_Category'] == key]
-        label_vi, cur_k = cat_Display_map[key]
-        if len(sub) > 0:
-            mean_k = 1.0 if key == 'Thuong' else float(sub[k_col].mean())
-            med_k = 1.0 if key == 'Thuong' else float(sub[k_col].median())
-            chosen_k = med_k if use_median else mean_k
-            computed_k[key] = round(chosen_k, 4)
-            summary_rows.append({
-                'Nhóm ngày': label_vi,
-                'Mã': key,
-                'Số ngày mẫu (n)': int(len(sub)),
-                'TB Phụ tải thuần (kWh)': float(sub['Net_Load'].mean()),
-                'Độ lệch chuẩn (kWh)': float(sub['Net_Load'].std()) if len(sub) > 1 else 0.0,
-                'k Trung bình (Mean)': mean_k,
-                'k Trung vị (Median)': med_k,
-                'Độ lệch chuẩn k': float(sub[k_col].std()) if len(sub) > 1 else 0.0,
-                'k Thấp nhất (Min)': float(sub[k_col].min()),
-                'k Cao nhất (Max)': float(sub[k_col].max()),
-                'k Đang dùng (Sidebar)': float(cur_k),
-                'k Đề xuất mới': round(chosen_k, 3),
-            })
-        else:
-            computed_k[key] = float(cur_k)
-            summary_rows.append({
-                'Nhóm ngày': label_vi,
-                'Mã': key,
-                'Số ngày mẫu (n)': 0,
-                'TB Phụ tải thuần (kWh)': np.nan,
-                'Độ lệch chuẩn (kWh)': np.nan,
-                'k Trung bình (Mean)': np.nan,
-                'k Trung vị (Median)': np.nan,
-                'Độ lệch chuẩn k': np.nan,
-                'k Thấp nhất (Min)': np.nan,
-                'k Cao nhất (Max)': np.nan,
-                'k Đang dùng (Sidebar)': float(cur_k),
-                'k Đề xuất mới': float(cur_k),
-            })
-
-    # Tính hệ số k_CatDien từ các ngày có cắt điện / giảm tải sâu
-    outage_sub = df_all_days[df_all_days['Is_Outage'] & df_all_days['k_Outage_Ratio'].notna()]
-    if len(outage_sub) > 0:
-        mean_k_out = float(outage_sub['k_Outage_Ratio'].mean())
-        med_k_out = float(outage_sub['k_Outage_Ratio'].median())
-        chosen_k_out = med_k_out if use_median else mean_k_out
-        computed_k['CatDien'] = round(chosen_k_out, 4)
-        summary_rows.append({
-            'Nhóm ngày': '⚡ Ngày có Cắt điện / Giảm tải sâu',
-            'Mã': 'CatDien',
-            'Số ngày mẫu (n)': int(len(outage_sub)),
-            'TB Phụ tải thuần (kWh)': float(outage_sub['Net_Load'].mean()),
-            'Độ lệch chuẩn (kWh)': float(outage_sub['Net_Load'].std()) if len(outage_sub) > 1 else 0.0,
-            'k Trung bình (Mean)': mean_k_out,
-            'k Trung vị (Median)': med_k_out,
-            'Độ lệch chuẩn k': float(outage_sub['k_Outage_Ratio'].std()) if len(outage_sub) > 1 else 0.0,
-            'k Thấp nhất (Min)': float(outage_sub['k_Outage_Ratio'].min()),
-            'k Cao nhất (Max)': float(outage_sub['k_Outage_Ratio'].max()),
-            'k Đang dùng (Sidebar)': float(k_default['CatDien']),
-            'k Đề xuất mới': round(chosen_k_out, 3),
-        })
-    else:
-        computed_k['CatDien'] = float(k_default['CatDien'])
-        summary_rows.append({
-            'Nhóm ngày': '⚡ Ngày có Cắt điện / Giảm tải sâu',
-            'Mã': 'CatDien',
-            'Số ngày mẫu (n)': 0,
-            'TB Phụ tải thuần (kWh)': np.nan,
-            'Độ lệch chuẩn (kWh)': np.nan,
-            'k Trung bình (Mean)': np.nan,
-            'k Trung vị (Median)': np.nan,
-            'Độ lệch chuẩn k': np.nan,
-            'k Thấp nhất (Min)': np.nan,
-            'k Cao nhất (Max)': np.nan,
-            'k Đang dùng (Sidebar)': float(k_default['CatDien']),
-            'k Đề xuất mới': float(k_default['CatDien']),
-        })
-
-    summary_k_df = pd.DataFrame(summary_rows)
-
-    # Hiển thị thẻ KPI tổng quan
-    m_a, m_b, m_c, m_d, m_e, m_f = st.columns(6)
-    m_a.metric('Tổng số tháng đã nạp', f"{df_all_days['YM'].nunique()} tháng ({len(df_all_days)} ngày)")
-    m_b.metric('k_T2 thực nghiệm', f"{computed_k['T2']:.3f}", f"{computed_k['T2'] - k_default['T2']:+.3f} vs hiện tại")
-    m_c.metric('k_T7 thực nghiệm', f"{computed_k['T7']:.3f}", f"{computed_k['T7'] - k_default['T7']:+.3f} vs hiện tại")
-    m_d.metric('k_CN thực nghiệm', f"{computed_k['CN']:.3f}", f"{computed_k['CN'] - k_default['CN']:+.3f} vs hiện tại")
-    m_e.metric('k_Lễ / k_Tết', f"{computed_k['Le']:.3f} / {computed_k['Tet']:.3f}")
-    m_f.metric('k_Cắt điện', f"{computed_k['CatDien']:.3f}", f"({len(outage_sub)} ngày mẫu)")
-
-    st.dataframe(
-        summary_k_df.drop(columns=['Mã']),
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            'TB Phụ tải thuần (kWh)': st.column_config.NumberColumn(format='%.0f'),
-            'Độ lệch chuẩn (kWh)': st.column_config.NumberColumn(format='%.0f'),
-            'k Trung bình (Mean)': st.column_config.NumberColumn(format='%.4f'),
-            'k Trung vị (Median)': st.column_config.NumberColumn(format='%.4f'),
-            'Độ lệch chuẩn k': st.column_config.NumberColumn(format='%.4f'),
-            'k Thấp nhất (Min)': st.column_config.NumberColumn(format='%.3f'),
-            'k Cao nhất (Max)': st.column_config.NumberColumn(format='%.3f'),
-            'k Đang dùng (Sidebar)': st.column_config.NumberColumn(format='%.3f'),
-            'k Đề xuất mới': st.column_config.NumberColumn(format='%.3f'),
-        },
-    )
-
-    # Biểu đồ trực quan hóa chuỗi phụ tải ngày & phân phối hệ số k
-    ch_col1, ch_col2 = st.columns([1.6, 1.0])
-    with ch_col1:
-        plot_df = df_all_days.copy()
-        plot_df['Nhãn hiển thị'] = np.where(
-            plot_df['Is_Outage'],
-            '⚡ Cắt điện / Giảm tải sâu',
-            plot_df['Base_Category'].map(CATEGORY_LABELS),
-        )
-        fig_daily = px.scatter(
-            plot_df,
-            x='Date_Obj',
-            y='Net_Load',
-            color='Nhãn hiển thị',
-            hover_data=['Date', 'Thu', 'Chieu_Nhan', 'Chieu_Giao', 'EDC', k_col],
-            title='Chuỗi phụ tải thuần từng ngày qua các tháng đã nạp',
-            labels={'Date_Obj': 'Thời gian', 'Net_Load': 'Sản lượng thuần (kWh)'},
-        )
-        fig_daily.add_trace(
-            go.Scatter(
-                x=plot_df['Date_Obj'],
-                y=plot_df['Net_Load'],
-                mode='lines',
-                line=dict(color='rgba(100,116,139,0.35)', width=1),
-                showlegend=False,
-                hoverinfo='skip',
-            )
-        )
-        fig_daily.update_layout(height=390, margin=dict(l=10, r=10, t=40, b=10), hovermode='x unified')
-        st.plotly_chart(fig_daily, use_container_width=True, key='chart_empirical_daily_series')
-
-    with ch_col2:
-        fig_box = px.box(
-            clean_days,
-            x='Base_Category',
-            y=k_col,
-            color='Base_Category',
-            points='all',
-            title='Phân phối xác suất hệ số k theo loại ngày',
-            labels={'Base_Category': 'Loại ngày', k_col: 'Hệ số k thực nghiệm'},
-        )
-        fig_box.update_layout(height=390, margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
-        st.plotly_chart(fig_box, use_container_width=True, key='chart_empirical_k_boxplot')
-
-    # Nút áp dụng trực tiếp vào Sidebar & đồng bộ ngày cắt điện
-    act_col1, act_col2 = st.columns([2, 2])
-    with act_col1:
-        if st.button('✅ ÁP DỤNG BỘ HỆ SỐ k THỰC NGHIỆM VÀO CẤU HÌNH MÔ HÌNH', type='primary', use_container_width=True):
-            st.session_state['k_input_T2'] = float(round(computed_k['T2'], 3))
-            st.session_state['k_input_T7'] = float(round(computed_k['T7'], 3))
-            st.session_state['k_input_CN'] = float(round(computed_k['CN'], 3))
-            st.session_state['k_input_Le'] = float(round(computed_k['Le'], 3))
-            st.session_state['k_input_Tet'] = float(round(computed_k['Tet'], 3))
-            st.session_state['k_input_CatDien'] = float(round(computed_k['CatDien'], 3))
-            st.success('Đã cập nhật bộ hệ số k thực nghiệm vào thanh cấu hình mô hình (Sidebar).')
-            st.rerun()
-    with act_col2:
-        if len(outage_sub) > 0:
-            if st.button(f'⚡ Đồng bộ {len(outage_sub)} ngày cắt điện phát hiện được vào Lịch cắt điện', use_container_width=True):
-                st.session_state.setdefault('custom_outage_Overrides', {})
-                for (oy, om), grp in outage_sub.groupby(['Year', 'Month']):
-                    dates_str = ', '.join(grp['Date'].tolist())
-                    st.session_state['custom_outage_Overrides'][(int(oy), int(om))] = dates_str
-                st.session_state['cal_sync_ver'] = st.session_state.get('cal_sync_ver', 0) + 1
-                st.success('Đã đồng bộ danh sách ngày cắt điện cụ thể vào bảng cấu hình.')
-                st.rerun()
-
-    with st.expander('🔎 Xem bảng dữ liệu chi tiết từng ngày của tất cả các tháng đã tải'):
-        st.dataframe(
-            df_all_days[['Date', 'Thu', 'Base_Category', 'Is_Outage', 'Chieu_Nhan', 'Chieu_Giao', 'EDC', 'NMDMT', 'Net_Load', 'Week_Base', 'k_Week', 'k_Outage_Ratio']],
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                'Chieu_Nhan': st.column_config.NumberColumn('Chiều nhận (kWh)', format='%.0f'),
-                'Chieu_Giao': st.column_config.NumberColumn('Chiều giao (kWh)', format='%.0f'),
-                'EDC': st.column_config.NumberColumn('EDC (kWh)', format='%.0f'),
-                'NMDMT': st.column_config.NumberColumn('NMĐMT (kWh)', format='%.0f'),
-                'Net_Load': st.column_config.NumberColumn('Phụ tải thuần (kWh)', format='%.0f'),
-                'Week_Base': st.column_config.NumberColumn('TB Ngày thường tuần (kWh)', format='%.0f'),
-                'k_Week': st.column_config.NumberColumn('k thực nghiệm', format='%.4f'),
-                'k_Outage_Ratio': st.column_config.NumberColumn('k cắt điện', format='%.4f'),
-            },
-        )
 
 
 def render_find_seed(df_train, df_input, holiday_map, k_default,
@@ -1113,13 +605,17 @@ st.markdown('''<div class="hero"><h2>⚡ HỆ THỐNG DỰ BÁO PHỤ TẢI ĐI�
 # Khởi tạo giá trị mặc định trong session_state cho 6 hệ số k để hỗ trợ cập nhật tự động từ file ngày
 for _k_name, _k_val in DEFAULT_K.items():
     st.session_state.setdefault(f'k_input_{_k_name}', float(_k_val))
+for _k_name, _k_val in st.session_state.pop('_pending_common_k', {}).items():
+    st.session_state[f'k_input_{_k_name}'] = float(_k_val)
 
 with st.sidebar:
     st.header('⚙️ Cấu hình mô hình')
     seed_val = st.number_input('Random Seed dự báo', value=42, step=1)
     st.caption('Backtest luôn dùng seed 42 để đánh giá khách quan và nhất quán.')
     st.divider()
-    st.write('**Hệ số ngày mặc định (k)**')
+    st.write('**Hệ số chung mặc định (k)**')
+    st.caption('Để tính từ file điện nhận/giao: mở tab 🧮 Tính hệ số k, tải file, '
+               'chọn tháng dự báo rồi bấm áp dụng. Hệ số riêng chỉ thay đổi tháng đã chọn.')
     c1, c2 = st.columns(2)
     with c1:
         k_t2 = st.number_input('T2', step=0.01, format='%.3f', key='k_input_T2')
@@ -1131,6 +627,22 @@ with st.sidebar:
         k_catdien = st.number_input('Cắt điện', step=0.01, format='%.3f', key='k_input_CatDien')
     k_default = {'T2': k_t2, 'T7': k_t7, 'CN': k_cn,
                  'Le': k_le, 'Tet': k_tet, 'CatDien': k_catdien}
+    month_overrides = st.session_state.get('monthly_k_overrides', {})
+    k_default['__monthly__'] = tuple(
+        (int(y), int(m), tuple(sorted(changes.items())))
+        for (y, m), changes in sorted(month_overrides.items())
+    )
+    if month_overrides:
+        _k_month_text = ', '.join(f'{m:02d}/{y}' for y, m in sorted(month_overrides))
+        st.info('Đã có hệ số riêng cho tháng: ' + _k_month_text + '. Xem chi tiết bên dưới.')
+        with st.expander('Hệ số riêng từng tháng'):
+            for (y, m), changes in sorted(month_overrides.items()):
+                st.write(f'{m:02d}/{y}: ' + ', '.join(f'{k}={v:.4f}' for k, v in sorted(changes.items())))
+            remove_ym = st.selectbox('Tháng muốn xóa hệ số riêng', sorted(month_overrides),
+                                     format_func=lambda ym: f'{ym[1]:02d}/{ym[0]}')
+            if st.button('Xóa hệ số riêng của tháng'):
+                st.session_state['monthly_k_overrides'].pop(remove_ym, None)
+                st.rerun()
     st.divider()
     st.write('**Lịch tổng hợp tương thích dữ liệu cũ**')
     holidays_edited = st.data_editor(pd.DataFrame(DEFAULT_HOLIDAYS), num_rows='dynamic',
@@ -1173,7 +685,7 @@ with up2:
 df_train_main = doc_excel_hoac_bao_loi(f_train, 'Lịch Sử', train=True) if f_train else None
 df_input_main = doc_excel_hoac_bao_loi(f_input, 'Dự Báo') if f_input else None
 
-tabs = st.tabs(['🏠 Tổng quan', '📂 Dữ liệu & lịch', '🔮 Dự báo', '📊 Đánh giá mô hình',
+tabs = st.tabs(['🏠 Tổng quan', '📂 Dữ liệu & lịch', '🧮 Tính hệ số k', '🔮 Dự báo', '📊 Đánh giá mô hình',
                 '🎛 Tinh chỉnh', '🤖 AI & công cụ', '📥 Xuất báo cáo'])
 
 # ----------------------------- Dữ liệu & lịch -----------------------------
@@ -1196,15 +708,18 @@ with tabs[1]:
 
     st.divider()
     st.subheader('📅 Lịch lễ theo ngày cụ thể')
-    st.info('Nếu một tháng có ít nhất một dòng ngày cụ thể, danh sách ngày cụ thể sẽ thay thế số lượng Lễ/Tết tổng hợp của tháng đó. Điều này cho phép xử lý chính xác lễ trùng T7/CN.')
+    st.info('Lịch mẫu chỉ để tham khảo. Hãy đối chiếu và đánh dấu đủ các ngày ảnh hưởng thực tế; '
+            'nếu một tháng có ngày Lễ/Tết cụ thể, danh sách cụ thể thay thế số lượng tổng hợp tháng đó. '
+            'Dòng chỉ có ghi chú không làm thay đổi loại ngày.')
 
     if 'holiday_dates_seed' not in st.session_state:
         st.session_state['holiday_dates_seed'] = pd.DataFrame(DEFAULT_SPECIFIC_HOLIDAYS)
 
     btn_col1, btn_col2, btn_col3 = st.columns([2, 2, 2])
     with btn_col1:
-        if st.button('📥 Nạp lịch Lễ/Tết chuẩn (2023–2026)', use_container_width=True):
+        if st.button('📥 Nạp lịch Lễ/Tết tham khảo (2023–2026)', use_container_width=True):
             st.session_state['holiday_dates_seed'] = pd.DataFrame(DEFAULT_SPECIFIC_HOLIDAYS)
+            st.session_state['calendar_confirmed_months'] = set()
             st.session_state['cal_sync_ver'] = st.session_state.get('cal_sync_ver', 0) + 1
             st.rerun()
     with btn_col2:
@@ -1236,6 +751,7 @@ with tabs[1]:
     with btn_col3:
         if st.button('🧹 Xóa trống bảng ngày cụ thể (dùng tổng hợp cũ)', use_container_width=True):
             st.session_state['holiday_dates_seed'] = pd.DataFrame(columns=['Ngày', 'Loại', 'Ghi chú'])
+            st.session_state['calendar_confirmed_months'] = set()
             st.session_state['cal_sync_ver'] = st.session_state.get('cal_sync_ver', 0) + 1
             st.rerun()
 
@@ -1252,11 +768,19 @@ with tabs[1]:
         key=f"holiday_dates_editor_{st.session_state.get('cal_sync_ver', 0)}",
         column_config={
             'Ngày': st.column_config.TextColumn('Ngày', help='Ví dụ 30/04/2026 hoặc 2026-04-30'),
-            'Loại': st.column_config.SelectboxColumn('Loại', options=['Lễ', 'Tết'], required=True),
+            'Loại': st.column_config.SelectboxColumn('Loại', options=['Lễ', 'Tết', 'Ghi chú'], required=True),
             'Ghi chú': st.column_config.TextColumn('Ghi chú sự kiện', help='Tên ngày nghỉ lễ/Tết'),
         })
     st.session_state['holiday_dates_seed'] = holiday_dates_editor
     holiday_dates = normalize_holiday_dates(holiday_dates_editor[['Ngày', 'Loại']])
+    for _idx, _entry in holiday_dates_editor.iterrows():
+        _text = _entry.get('Ngày', '')
+        if pd.notna(_text) and str(_text).strip() and pd.isna(pd.to_datetime(str(_text), dayfirst=True, errors='coerce')):
+            st.warning(f"Ngày '{_text}' không hợp lệ và chưa được dùng; hãy sửa theo dạng dd/mm/yyyy.")
+    # A month explicitly reviewed in the visual calendar must not silently
+    # reintroduce legacy holiday counts after all marked holidays are removed.
+    for confirmed_y, confirmed_m in st.session_state.get('calendar_confirmed_months', set()):
+        holidays_map[(int(confirmed_y), int(confirmed_m))] = (0, 0)
     if not holiday_dates.empty:
         st.success(f'Đã nhận {len(holiday_dates)} ngày lễ/Tết cụ thể.')
 
@@ -1274,9 +798,8 @@ with tabs[1]:
                     'Tháng': ym_pair[1],
                     'Ngày cắt điện cụ thể': custom_outage_overrides.get(ym_pair, ''),
                 })
-    if not months_rows:
-        for (oy, om), oval in sorted(custom_outage_overrides.items()):
-            months_rows.append({'Năm': oy, 'Tháng': om, 'Ngày cắt điện cụ thể': oval})
+    for (oy, om), oval in sorted(custom_outage_overrides.items()):
+        months_rows.append({'Năm': oy, 'Tháng': om, 'Ngày cắt điện cụ thể': oval})
 
     outage_seed = (
         pd.DataFrame(months_rows).drop_duplicates(['Năm', 'Tháng'])
@@ -1289,10 +812,30 @@ with tabs[1]:
         key=f"outage_dates_editor_{st.session_state.get('cal_sync_ver', 0)}"
     )
     outage_dates_map = dataframe_outage_map(outage_editor)
+    st.session_state['custom_outage_Overrides'] = dict(outage_dates_map)
 
-    st.divider()
-    # --- MODULE TÍNH TOÁN HỆ SỐ K TỪ NHIỀU FILE ĐIỆN NHẬN - ĐIỆN GIAO NGÀY ---
-    render_empirical_k_calculator(holiday_dates, outage_dates_map, k_default)
+    with st.expander('💾 Sao lưu / khôi phục lịch và ghi chú'):
+        st.caption('Lịch và hệ số trong phiên làm việc có thể mất khi tải lại trang. '
+                   'Hãy tải bản sao lưu lịch sau khi chỉnh sửa; bản sao lưu không chứa các file điện.')
+        calendar_backup = dump_calendar(holiday_dates_editor, outage_dates_map,
+                                        st.session_state.get('calendar_confirmed_months', set()),
+                                        k_default, st.session_state.get('monthly_k_overrides', {}))
+        st.download_button('Tải bản sao lưu lịch (.json)', data=calendar_backup,
+                           file_name='lich_va_ghi_chu.json', mime='application/json')
+        calendar_import = st.file_uploader('Chọn bản sao lưu lịch để khôi phục', type=['json'],
+                                           key='calendar_backup_upload')
+        if st.button('Khôi phục lịch từ tệp', disabled=calendar_import is None):
+            try:
+                restored_rows, restored_outages, restored_months, restored_common, restored_k = load_calendar(calendar_import.getvalue())
+                st.session_state['holiday_dates_seed'] = restored_rows
+                st.session_state['custom_outage_Overrides'] = restored_outages
+                st.session_state['calendar_confirmed_months'] = restored_months
+                st.session_state['_pending_common_k'] = restored_common
+                st.session_state['monthly_k_overrides'] = restored_k
+                st.session_state['cal_sync_ver'] = st.session_state.get('cal_sync_ver', 0) + 1
+                st.rerun()
+            except (ValueError, TypeError, KeyError) as exc:
+                st.error(f'Không khôi phục được lịch: {exc}')
 
     st.divider()
     # Tập hợp danh sách các tháng để hiển thị trên Lịch trực quan & bảng đánh dấu
@@ -1316,6 +859,10 @@ with tabs[1]:
                         'So_Ngay_Cat_Dien', 'Ngay_Tuong_Duong', 'Che_Do_Le', 'Che_Do_Cat_Dien']
         st.dataframe(features_preview[preview_cols], hide_index=True, use_container_width=True)
 
+# ----------------------- Phân tích hệ số k -----------------------
+with tabs[2]:
+    render_empirical_k_calculator(holiday_dates, outage_dates_map, k_default)
+
 try:
     holiday_dates
 except NameError:
@@ -1338,7 +885,7 @@ if st.session_state.get('result_signature') not in (None, input_signature):
         st.session_state.pop(key, None)
 
 # ----------------------------- Dự báo -----------------------------
-with tabs[2]:
+with tabs[3]:
     st.subheader('Chạy dự báo định lượng')
     st.caption('Ba mô hình cốt lõi giữ nguyên: Neural Network, Random Forest và XGBoost. AI tin tức không tự động thay đổi kết quả này.')
     if df_train_main is None or df_input_main is None:
@@ -1369,9 +916,12 @@ with tabs[2]:
                                         for c in ['Neural Network', 'Random Forest', 'XGBoost', 'Thực Tế'] if c in display_cols})
 
 # ----------------------------- Đánh giá -----------------------------
-with tabs[3]:
+with tabs[4]:
     st.subheader('Đánh giá độ chính xác bằng backtest theo thời gian')
-    st.info('Mặc định kiểm định tối đa 12 tháng gần nhất. Mỗi tháng chỉ được dự báo bằng dữ liệu đứng trước nó; backtest dùng seed cố định 42, không dùng seed từ Find Seed.')
+    st.info('Kiểm định hiện tại là dự báo một bước: huấn luyện đến tháng ngay trước tháng kiểm định, '
+            'dùng các biến đầu vào có trong file và seed 42. Chương trình chưa tự tái dựng số ước '
+            'đã có vào ngày 10 hoặc tự tính lại k cho từng mốc quá khứ. Nếu nhiệt độ, độ ẩm hay '
+            'hệ số k được biết sau mốc dự báo thì kết quả không phải kiểm định độc lập.')
     if df_train_main is None:
         st.caption('Cần file lịch sử.')
     elif len(df_train_main) <= 12:
@@ -1421,7 +971,7 @@ with tabs[3]:
                 st.dataframe(st.session_state.evaluation_detail, hide_index=True, use_container_width=True)
 
 # ----------------------------- Tinh chỉnh -----------------------------
-with tabs[4]:
+with tabs[5]:
     st.subheader('Tinh chỉnh & chốt sản lượng')
     if 'res_output' not in st.session_state or df_input_main is None:
         st.info('Chạy dự báo trước khi tinh chỉnh.')
@@ -1435,12 +985,13 @@ with tabs[4]:
         row_res = res[(res['Năm'] == sy) & (res['Tháng'] == sm)].iloc[0]
         exact_global = outage_dates_map.get((sy, sm), '')
         current_count = int(row_input.get('Số ngày cắt điện', 0) or 0)
+        active_month_k = coefficients_for_month(k_default, sy, sm)
         edit = pd.DataFrame([{
             'Tháng': selected,
             'Số ngày cắt điện (fallback)': current_count,
             'Ngày cắt điện cụ thể': exact_global,
-            'k_T2': k_default['T2'], 'k_T7': k_default['T7'], 'k_CN': k_default['CN'],
-            'k_Lễ': k_default['Le'], 'k_Tết': k_default['Tet'], 'k_Cắt điện': k_default['CatDien'],
+            'k_T2': active_month_k['T2'], 'k_T7': active_month_k['T7'], 'k_CN': active_month_k['CN'],
+            'k_Lễ': active_month_k['Le'], 'k_Tết': active_month_k['Tet'], 'k_Cắt điện': active_month_k['CatDien'],
         }])
         edited = st.data_editor(edit, hide_index=True, use_container_width=True,
                                 disabled=['Tháng'], key=f'adjust_{selected}_{model_for_base}')
@@ -1498,7 +1049,7 @@ with tabs[4]:
             st.dataframe(final_df, hide_index=True, use_container_width=True)
 
 # ----------------------------- AI & công cụ -----------------------------
-with tabs[5]:
+with tabs[6]:
     st.subheader('🤖 Phân tích tin tức — chỉ tham khảo')
     text_data = st.text_area('Dán nội dung hoặc link bài báo', height=130,
                              placeholder='Ví dụ: Dự báo nắng nóng gay gắt tháng tới...')
@@ -1557,7 +1108,7 @@ with tabs[0]:
                 st.warning('Một số tháng vẫn dùng dữ liệu tổng hợp. Nhập ngày cụ thể nếu cần xử lý chính xác trường hợp trùng.')
 
 # ----------------------------- Xuất báo cáo -----------------------------
-with tabs[6]:
+with tabs[7]:
     st.subheader('📥 Xuất báo cáo Excel')
     if 'res_output' not in st.session_state or df_input_main is None:
         st.info('Chạy dự báo trước khi xuất báo cáo.')
@@ -1571,12 +1122,20 @@ with tabs[6]:
         cal_detail = calendar_detail_for_dataframe(df_input_main, holidays_map, holiday_dates,
                                                    outage_dates_map, k_default)
         if not cal_detail.empty:
-            export_cal_cols = ['Năm', 'Tháng', 'Ngày', 'Loại ngày', 'Cat_Dien', 'k_Loai_Ngay', 'k_Cat_Dien', 'k_Cuoi', 'Nguon_Phan_Loai', 'Nguon_Cat_Dien']
+            note_map = {}
+            for _, note_row in holiday_dates_editor.iterrows():
+                parsed_note_date = pd.to_datetime(note_row.get('Ngày'), dayfirst=True, errors='coerce')
+                if pd.notna(parsed_note_date):
+                    note = note_row.get('Ghi chú', '')
+                    note_map[parsed_note_date.normalize()] = '' if pd.isna(note) else str(note)
+            cal_detail['Ghi chú'] = pd.to_datetime(cal_detail['Ngày']).dt.normalize().map(note_map).fillna('')
+            export_cal_cols = ['Năm', 'Tháng', 'Ngày', 'Loại ngày', 'Ghi chú', 'Cat_Dien', 'k_Loai_Ngay', 'k_Cat_Dien', 'k_Cuoi', 'Nguon_Phan_Loai', 'Nguon_Cat_Dien']
             cal_detail = cal_detail[[c for c in export_cal_cols if c in cal_detail.columns]]
         params = {
             'Random Seed dự báo': int(seed_val), 'Seed backtest': 42,
             'k_T2': k_default['T2'], 'k_T7': k_default['T7'], 'k_CN': k_default['CN'],
             'k_Lễ': k_default['Le'], 'k_Tết': k_default['Tet'], 'k_Cắt điện': k_default['CatDien'],
+            'Hệ số riêng tháng': str(k_default.get('__monthly__', ())),
             'Nguyên tắc cắt điện': 'k cuối = k loại ngày × k cắt điện',
             'AI tin tức tác động dự báo': 'Không',
         }
