@@ -613,7 +613,9 @@ with st.sidebar:
     seed_val = st.number_input('Random Seed dự báo', value=42, step=1)
     st.caption('Backtest luôn dùng seed 42 để đánh giá khách quan và nhất quán.')
     st.divider()
-    st.write('**Hệ số ngày mặc định (k)**')
+    st.write('**Hệ số chung mặc định (k)**')
+    st.caption('Để tính từ file điện nhận/giao: mở tab 🧮 Tính hệ số k, tải file, '
+               'chọn tháng dự báo rồi bấm áp dụng. Hệ số riêng chỉ thay đổi tháng đã chọn.')
     c1, c2 = st.columns(2)
     with c1:
         k_t2 = st.number_input('T2', step=0.01, format='%.3f', key='k_input_T2')
@@ -631,6 +633,8 @@ with st.sidebar:
         for (y, m), changes in sorted(month_overrides.items())
     )
     if month_overrides:
+        _k_month_text = ', '.join(f'{m:02d}/{y}' for y, m in sorted(month_overrides))
+        st.info('Đã có hệ số riêng cho tháng: ' + _k_month_text + '. Xem chi tiết bên dưới.')
         with st.expander('Hệ số riêng từng tháng'):
             for (y, m), changes in sorted(month_overrides.items()):
                 st.write(f'{m:02d}/{y}: ' + ', '.join(f'{k}={v:.4f}' for k, v in sorted(changes.items())))
@@ -681,7 +685,7 @@ with up2:
 df_train_main = doc_excel_hoac_bao_loi(f_train, 'Lịch Sử', train=True) if f_train else None
 df_input_main = doc_excel_hoac_bao_loi(f_input, 'Dự Báo') if f_input else None
 
-tabs = st.tabs(['🏠 Tổng quan', '📂 Dữ liệu & lịch', '🔮 Dự báo', '📊 Đánh giá mô hình',
+tabs = st.tabs(['🏠 Tổng quan', '📂 Dữ liệu & lịch', '🧮 Tính hệ số k', '🔮 Dự báo', '📊 Đánh giá mô hình',
                 '🎛 Tinh chỉnh', '🤖 AI & công cụ', '📥 Xuất báo cáo'])
 
 # ----------------------------- Dữ liệu & lịch -----------------------------
@@ -834,10 +838,6 @@ with tabs[1]:
                 st.error(f'Không khôi phục được lịch: {exc}')
 
     st.divider()
-    # --- MODULE TÍNH TOÁN HỆ SỐ K TỪ NHIỀU FILE ĐIỆN NHẬN - ĐIỆN GIAO NGÀY ---
-    render_empirical_k_calculator(holiday_dates, outage_dates_map, k_default)
-
-    st.divider()
     # Tập hợp danh sách các tháng để hiển thị trên Lịch trực quan & bảng đánh dấu
     all_ym_list = sorted({
         (int(r['Năm']), int(r['Tháng']))
@@ -858,6 +858,10 @@ with tabs[1]:
                         'So_Ngay_CN', 'So_Ngay_Le_Nho', 'So_Ngay_Tet_Am',
                         'So_Ngay_Cat_Dien', 'Ngay_Tuong_Duong', 'Che_Do_Le', 'Che_Do_Cat_Dien']
         st.dataframe(features_preview[preview_cols], hide_index=True, use_container_width=True)
+
+# ----------------------- Phân tích hệ số k -----------------------
+with tabs[2]:
+    render_empirical_k_calculator(holiday_dates, outage_dates_map, k_default)
 
 try:
     holiday_dates
@@ -881,7 +885,7 @@ if st.session_state.get('result_signature') not in (None, input_signature):
         st.session_state.pop(key, None)
 
 # ----------------------------- Dự báo -----------------------------
-with tabs[2]:
+with tabs[3]:
     st.subheader('Chạy dự báo định lượng')
     st.caption('Ba mô hình cốt lõi giữ nguyên: Neural Network, Random Forest và XGBoost. AI tin tức không tự động thay đổi kết quả này.')
     if df_train_main is None or df_input_main is None:
@@ -912,7 +916,7 @@ with tabs[2]:
                                         for c in ['Neural Network', 'Random Forest', 'XGBoost', 'Thực Tế'] if c in display_cols})
 
 # ----------------------------- Đánh giá -----------------------------
-with tabs[3]:
+with tabs[4]:
     st.subheader('Đánh giá độ chính xác bằng backtest theo thời gian')
     st.info('Kiểm định hiện tại là dự báo một bước: huấn luyện đến tháng ngay trước tháng kiểm định, '
             'dùng các biến đầu vào có trong file và seed 42. Chương trình chưa tự tái dựng số ước '
@@ -967,7 +971,7 @@ with tabs[3]:
                 st.dataframe(st.session_state.evaluation_detail, hide_index=True, use_container_width=True)
 
 # ----------------------------- Tinh chỉnh -----------------------------
-with tabs[4]:
+with tabs[5]:
     st.subheader('Tinh chỉnh & chốt sản lượng')
     if 'res_output' not in st.session_state or df_input_main is None:
         st.info('Chạy dự báo trước khi tinh chỉnh.')
@@ -1045,7 +1049,7 @@ with tabs[4]:
             st.dataframe(final_df, hide_index=True, use_container_width=True)
 
 # ----------------------------- AI & công cụ -----------------------------
-with tabs[5]:
+with tabs[6]:
     st.subheader('🤖 Phân tích tin tức — chỉ tham khảo')
     text_data = st.text_area('Dán nội dung hoặc link bài báo', height=130,
                              placeholder='Ví dụ: Dự báo nắng nóng gay gắt tháng tới...')
@@ -1104,7 +1108,7 @@ with tabs[0]:
                 st.warning('Một số tháng vẫn dùng dữ liệu tổng hợp. Nhập ngày cụ thể nếu cần xử lý chính xác trường hợp trùng.')
 
 # ----------------------------- Xuất báo cáo -----------------------------
-with tabs[6]:
+with tabs[7]:
     st.subheader('📥 Xuất báo cáo Excel')
     if 'res_output' not in st.session_state or df_input_main is None:
         st.info('Chạy dự báo trước khi xuất báo cáo.')

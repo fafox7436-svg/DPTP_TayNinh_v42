@@ -21,11 +21,11 @@ Nếu repository có thay đổi mới hơn gói v42 đã gửi, hãy đối chi
 
 ## Cách sử dụng tính năng mới
 
-1. Mở ứng dụng đã cập nhật và vào **Dữ liệu & lịch**.
+1. Mở ứng dụng đã cập nhật và vào **Dữ liệu & lịch** để chỉnh ngày nghỉ.
 2. Ở **Lịch trực quan**, chọn tháng/năm, đánh dấu ngày Lễ/Tết/cắt điện, ghi chú và bấm **Áp dụng đánh dấu**. Lịch mẫu cần được đơn vị tự kiểm tra.
-3. Tại **Phân tích hệ số k từ điện nhận – điện giao ngày**, chọn nhiều file Excel theo ngày. File có sheet `Chiều nhận`, `Chiều giao`, cột `Mã điểm đo`, `Tên điểm đo` và các cột ngày 1–31 như file bạn đã gửi.
+3. Mở tab **🧮 Tính hệ số k**, tại **Phân tích hệ số k từ điện nhận – điện giao ngày** chọn nhiều file Excel theo ngày. File có sheet `Chiều nhận`, `Chiều giao`, cột `Mã điểm đo`, `Tên điểm đo` và các cột ngày 1–31 như file bạn đã gửi.
 4. Xác nhận năm/tháng, chọn phạm vi điểm đo và năm phân tích. Chọn tháng cần dự báo và ngày chốt; chương trình chỉ sử dụng các ngày trước ngày chốt. Chọn nhận trừ giao, chỉ nhận hoặc chỉ giao; xem các cảnh báo và số mẫu.
-5. Nếu muốn, chọn các hệ số có dữ liệu để áp dụng riêng cho tháng dự báo. Bấm tải sao lưu JSON sau khi chỉnh sửa lịch/hệ số để dùng lại khi ứng dụng khởi động phiên mới. File điện được tải lại từ máy khi cần.
+5. Nếu muốn, chọn các hệ số có dữ liệu để áp dụng riêng cho tháng dự báo. Các số bên thanh cấu hình là hệ số chung mặc định; hệ số đã chọn riêng được báo ở bên dưới và có hiệu lực cho tháng tương ứng. Trở lại **Dữ liệu & lịch** và tải sao lưu JSON sau khi chỉnh sửa lịch/hệ số để dùng lại khi ứng dụng khởi động phiên mới. File điện được tải lại từ máy khi cần.
 
 Điện nhận trừ điện giao là dòng điện ở phạm vi đo, chưa tự động bằng điện thương phẩm của 14 huyện. Các kỳ có thể thay đổi điểm đo; dữ liệu còn thiếu và số lượng năm quan sát ảnh hưởng độ tin cậy. Các giá trị k là thăm dò cần được đối chiếu và kiểm định, chưa phải chứng minh cải thiện dự báo.
 
