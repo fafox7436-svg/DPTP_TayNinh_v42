@@ -70,6 +70,39 @@ class StreamlitManyMonthsTests(unittest.TestCase):
         self.assertFalse(list(app.exception), [str(x) for x in app.exception])
         self.assertTrue(app.session_state['monthly_k_overrides'])
 
+    def test_real_models_use_target_month_k(self):
+        import calendar
+        import numpy as np
+        import pandas as pd
+        from forecast.config import DEFAULT_K
+        from forecast.data import tao_dac_trung
+        from forecast.models import chay_mo_hinh_goc
+
+        history = pd.DataFrame([
+            {'Năm': y, 'Tháng': m, 'Số ngày': calendar.monthrange(y, m)[1],
+             'Nhiệt độ TB': 27 + (m % 5), 'Độ ẩm': 70 + (m % 8),
+             'Tổng thương phẩm': 500_000_000 + (y - 2023) * 20_000_000 + m * 1_000_000}
+            for y in (2023, 2024, 2025) for m in range(1, 13)
+        ])
+        future = pd.DataFrame([
+            {'Năm': 2026, 'Tháng': m, 'Số ngày': calendar.monthrange(2026, m)[1],
+             'Nhiệt độ TB': 27 + (m % 5), 'Độ ẩm': 70 + (m % 8)}
+            for m in (2, 3)
+        ])
+        holiday = pd.DataFrame([{'Ngày': '17/02/2026', 'Loại': 'Tết'}])
+        original = dict(DEFAULT_K)
+        updated = dict(DEFAULT_K, __monthly__=((2026, 2, (('Tet', .25),)),))
+        old_days = tao_dac_trung(future, {}, holiday, k_dict=original)['Ngay_Tuong_Duong'].to_numpy()
+        new_days = tao_dac_trung(future, {}, holiday, k_dict=updated)['Ngay_Tuong_Duong'].to_numpy()
+        original_pred = chay_mo_hinh_goc(history, future, {}, original, seed=42, holiday_dates=holiday)
+        updated_pred = chay_mo_hinh_goc(history, future, {}, updated, seed=42, holiday_dates=holiday)
+        for baseline, revised in zip(original_pred, updated_pred):
+            baseline, revised = np.asarray(baseline, dtype=float), np.asarray(revised, dtype=float)
+            self.assertTrue(np.all(np.isfinite(baseline)))
+            self.assertGreater(baseline[0], 0)
+            self.assertAlmostEqual(revised[0] / baseline[0], new_days[0] / old_days[0], places=7)
+            self.assertAlmostEqual(revised[1], baseline[1], delta=0.01)
+
 
 if __name__ == '__main__':
     unittest.main()
