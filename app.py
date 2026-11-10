@@ -861,7 +861,9 @@ with tabs[1]:
 
 # ----------------------- Phân tích hệ số k -----------------------
 with tabs[2]:
-    render_empirical_k_calculator(holiday_dates, outage_dates_map, k_default)
+    render_empirical_k_calculator(holiday_dates, outage_dates_map, k_default,
+                                  holidays_map=holidays_map, holiday_notes=holiday_dates_editor,
+                                  forecast_input=df_input_main)
 
 try:
     holiday_dates
